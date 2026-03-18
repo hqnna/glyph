@@ -1,0 +1,20 @@
+# Zig
+.zig-cache/
+zig-out/
+
+# Nix
+.direnv/
+result
+
+# OS
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# IDE & Editor
+.DS_Store
+.vscode/
+.idea/
+.zed/
+*.swp
+*.swo
