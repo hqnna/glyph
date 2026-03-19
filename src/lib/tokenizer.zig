@@ -1,27 +1,16 @@
 const Tokenizer = @This();
 const std = @import("std");
+const v = @import("vector.zig");
 
 cursor: usize,
 data: []const u8,
 
-const Chunk = @Vector(chunk_size, u8);
-const chunk_size = std.simd.suggestVectorLength(u8) orelse 16;
-const Mask = std.meta.Int(.unsigned, chunk_size);
-
 pub const Token = struct {
-    pub const Kind = enum(u8) {
-        ident,
-        boolean,
-        number,
-        string,
-        object,
-        array,
-        nil,
-    };
+    pub const Kind = enum(u8) { ident, number };
 
     kind: Kind,
     start: usize,
-    end: ?usize,
+    end: usize,
 };
 
 pub fn init(data: []const u8) Tokenizer {
@@ -34,18 +23,16 @@ fn identifier(self: *Tokenizer) ?Token {
     const start = self.cursor;
     self.cursor += 1;
 
-    while (self.cursor + chunk_size <= self.data.len) : (self.cursor += chunk_size) {
-        const chunk: Chunk = self.data[self.cursor..][0..chunk_size].*;
+    while (self.cursor + v.length <= self.data.len) : (self.cursor += v.length) {
+        const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
 
-        const is_lower = (chunk >= @as(Chunk, @splat('a'))) & (chunk <= @as(Chunk, @splat('z')));
-        const is_upper = (chunk >= @as(Chunk, @splat('A'))) & (chunk <= @as(Chunk, @splat('Z')));
-        const is_digit = (chunk >= @as(Chunk, @splat('0'))) & (chunk <= @as(Chunk, @splat('9')));
-        const is_under = chunk == @as(Chunk, @splat('_'));
+        const is_alpha = v.isAlpha(chunk);
+        const is_digit = v.isDigit(chunk);
+        const is_under = chunk == @as(v.Value, @splat('_'));
+        const valid = is_alpha | is_digit | is_under;
+        const mask = @as(v.Bits, @bitCast(valid));
 
-        const valid = is_lower | is_upper | is_digit | is_under;
-        const mask = @as(Mask, @bitCast(valid));
-
-        if (mask != std.math.maxInt(Mask)) {
+        if (mask != std.math.maxInt(v.Bits)) {
             self.cursor += @ctz(~mask);
             return Token{ .kind = .ident, .start = start, .end = self.cursor };
         }
