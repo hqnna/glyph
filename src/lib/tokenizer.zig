@@ -6,7 +6,7 @@ cursor: usize,
 data: []const u8,
 
 pub const Token = struct {
-    pub const Kind = enum(u8) { ident, number };
+    pub const Kind = enum(u8) { ident, whitespace };
 
     kind: Kind,
     start: usize,
@@ -44,4 +44,34 @@ fn identifier(self: *Tokenizer) ?Token {
     }
 
     return Token{ .kind = .ident, .start = start, .end = self.cursor };
+}
+
+fn whitespace(self: *Tokenizer) ?Token {
+    if (!std.ascii.isWhitespace(self.data[self.cursor])) return null;
+
+    const start = self.cursor;
+    self.cursor += 1;
+
+    while (self.cursor + v.length <= self.data.len) : (self.cursor += v.length) {
+        const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
+
+        const is_space = v.is(chunk, ' ');
+        const is_return = v.is(chunk, '\r');
+        const is_newline = v.is(chunk, '\n');
+        const is_tab = v.is(chunk, '\t');
+
+        const valid = is_space | is_tab | is_return | is_newline;
+        const mask = @as(v.Bits, @bitCast(valid));
+
+        if (mask != std.math.maxInt(v.Bits)) {
+            self.cursor += @ctz(~mask);
+            return Token{ .kind = .whitespace, .start = start, .end = self.cursor };
+        }
+    }
+
+    while (self.cursor < self.data.len) : (self.cursor += 1) {
+        if (!std.ascii.isWhitespace(self.data[self.cursor])) break;
+    }
+
+    return Token{ .kind = .whitespace, .start = start, .end = self.cursor };
 }
