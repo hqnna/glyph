@@ -174,11 +174,22 @@ fn string(self: *Tokenizer) ?Token {
 
 fn number(self: *Tokenizer) ?Token {
     if (self.cursor >= self.data.len) return null;
-    if (!std.ascii.isDigit(self.data[self.cursor])) return null;
 
-    const start = self.cursor;
-    var exponent = false;
     var decimal = false;
+    var exponent = false;
+    const start = self.cursor;
+
+    if (self.data[self.cursor] == '-') {
+        self.cursor += 1;
+        if (self.cursor >= self.data.len) return null;
+        if (!std.ascii.isDigit(self.data[self.cursor])) {
+            self.cursor = start;
+            return null;
+        }
+    } else if (!std.ascii.isDigit(self.data[self.cursor])) {
+        return null;
+    }
+
     self.cursor += 1;
 
     while (self.cursor + v.length <= self.data.len) {
