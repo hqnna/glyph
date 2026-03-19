@@ -6,7 +6,7 @@ cursor: usize,
 data: []const u8,
 
 pub const Token = struct {
-    pub const Kind = enum(u8) { ident, whitespace };
+    pub const Kind = enum(u8) { ident, whitespace, comment };
 
     kind: Kind,
     start: usize,
@@ -18,6 +18,7 @@ pub fn init(data: []const u8) Tokenizer {
 }
 
 fn identifier(self: *Tokenizer) ?Token {
+    if (self.cursor >= self.data.len) return null;
     if (!std.ascii.isAlphabetic(self.data[self.cursor])) return null;
 
     const start = self.cursor;
@@ -47,6 +48,7 @@ fn identifier(self: *Tokenizer) ?Token {
 }
 
 fn whitespace(self: *Tokenizer) ?Token {
+    if (self.cursor >= self.data.len) return null;
     if (!std.ascii.isWhitespace(self.data[self.cursor])) return null;
 
     const start = self.cursor;
@@ -74,4 +76,28 @@ fn whitespace(self: *Tokenizer) ?Token {
     }
 
     return Token{ .kind = .whitespace, .start = start, .end = self.cursor };
+}
+
+fn comment(self: *Tokenizer) ?Token {
+    if (self.cursor >= self.data.len) return null;
+    if (self.data[self.cursor] != '#') return null;
+
+    const start = self.cursor;
+    self.cursor += 1;
+
+    while (self.cursor + v.length <= self.data.len) : (self.cursor += v.length) {
+        const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
+        const mask = @as(v.Bits, @bitCast(v.is(chunk, '\n')));
+
+        if (mask != 0) {
+            self.cursor += @ctz(mask);
+            return Token{ .kind = .comment, .start = start, .end = self.cursor };
+        }
+    }
+
+    while (self.cursor < self.data.len) : (self.cursor += 1) {
+        if (self.data[self.cursor] == '\n') break;
+    }
+
+    return Token{ .kind = .comment, .start = start, .end = self.cursor };
 }
