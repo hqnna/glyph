@@ -28,7 +28,7 @@ fn identifier(self: *Tokenizer) ?Token {
 
         const is_alpha = v.isAlpha(chunk);
         const is_digit = v.isDigit(chunk);
-        const is_under = chunk == @as(v.Value, @splat('_'));
+        const is_under = v.is(chunk, '_');
         const valid = is_alpha | is_digit | is_under;
         const mask = @as(v.Bits, @bitCast(valid));
 

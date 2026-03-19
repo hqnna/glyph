@@ -14,3 +14,7 @@ pub inline fn isAlpha(chunk: Value) Condition {
 pub inline fn isDigit(chunk: Value) Condition {
     return (chunk >= @as(Value, @splat('0'))) & (chunk <= @as(Value, @splat('9')));
 }
+
+pub inline fn is(chunk: Value, char: u8) Condition {
+    return chunk == @as(Value, @splat(char));
+}
