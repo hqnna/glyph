@@ -137,7 +137,7 @@ fn string(self: *Tokenizer) ?Token {
     const start = self.cursor;
     self.cursor += 1;
 
-    while (self.cursor + v.length <= self.data.len) : (self.cursor += v.length) {
+    while (self.cursor + v.length <= self.data.len) {
         const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
 
         const is_quote = v.is(chunk, '"');
@@ -149,10 +149,12 @@ fn string(self: *Tokenizer) ?Token {
             self.cursor += @ctz(mask);
             switch (self.stringStop()) {
                 .end => return Token{ .kind = .string, .start = start, .end = self.cursor },
-                .cont => {},
+                .cont => continue,
                 .fail => return null,
             }
         }
+
+        self.cursor += v.length;
     }
 
     while (self.cursor < self.data.len) {
@@ -178,7 +180,7 @@ fn number(self: *Tokenizer) ?Token {
     var exponent = false;
     self.cursor += 1;
 
-    while (self.cursor + v.length <= self.data.len) : (self.cursor += v.length) {
+    while (self.cursor + v.length <= self.data.len) {
         const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
 
         const is_digit = v.isDigit(chunk);
@@ -187,11 +189,13 @@ fn number(self: *Tokenizer) ?Token {
         if (mask != 0) {
             self.cursor += @ctz(mask);
             switch (self.numberStop(&decimal, &exponent)) {
-                .cont => {},
+                .cont => continue,
                 .end => return Token{ .kind = .number, .start = start, .end = self.cursor },
                 .fail => return null,
             }
         }
+
+        self.cursor += v.length;
     }
 
     while (self.cursor < self.data.len) : (self.cursor += 1) {
