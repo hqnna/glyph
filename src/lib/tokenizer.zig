@@ -16,7 +16,8 @@ pub const Token = struct {
         rbracket,
         comment,
         string,
-        number,
+        integer,
+        float,
         lbrace,
         rbrace,
         colon,
@@ -176,8 +177,8 @@ fn number(self: *Tokenizer) ?Token {
     if (!std.ascii.isDigit(self.data[self.cursor])) return null;
 
     const start = self.cursor;
-    var decimal = false;
     var exponent = false;
+    var decimal = false;
     self.cursor += 1;
 
     while (self.cursor + v.length <= self.data.len) {
@@ -190,7 +191,10 @@ fn number(self: *Tokenizer) ?Token {
             self.cursor += @ctz(mask);
             switch (self.numberStop(&decimal, &exponent)) {
                 .cont => continue,
-                .end => return Token{ .kind = .number, .start = start, .end = self.cursor },
+                .end => {
+                    const kind: Token.Kind = if (decimal or exponent) .float else .integer;
+                    return Token{ .kind = kind, .start = start, .end = self.cursor };
+                },
                 .fail => return null,
             }
         }
@@ -202,13 +206,17 @@ fn number(self: *Tokenizer) ?Token {
         if (!std.ascii.isDigit(self.data[self.cursor])) {
             switch (self.numberStop(&decimal, &exponent)) {
                 .cont => {},
-                .end => return Token{ .kind = .number, .start = start, .end = self.cursor },
+                .end => {
+                    const kind: Token.Kind = if (decimal or exponent) .float else .integer;
+                    return Token{ .kind = kind, .start = start, .end = self.cursor };
+                },
                 .fail => return null,
             }
         }
     }
 
-    return Token{ .kind = .number, .start = start, .end = self.cursor };
+    const kind: Token.Kind = if (decimal or exponent) .float else .integer;
+    return Token{ .kind = kind, .start = start, .end = self.cursor };
 }
 
 fn symbol(self: *Tokenizer) ?Token {
