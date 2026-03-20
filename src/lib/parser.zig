@@ -20,6 +20,25 @@ pub const Node = union(enum(u8)) {
     float: f64,
     boolean: bool,
     nil: void,
+
+    pub fn deinit(self: *Node, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .object => |fields| {
+                for (fields) |field| {
+                    allocator.free(field.name);
+                    field.value.deinit(allocator);
+                }
+                allocator.free(fields);
+            },
+            .array => |items| {
+                for (items) |item| item.deinit(allocator);
+                allocator.free(items);
+            },
+            .string => |s| allocator.free(s),
+            else => {},
+        }
+        allocator.destroy(self);
+    }
 };
 
 const Error =
@@ -75,7 +94,7 @@ pub fn parse(self: *Parser) Error!*Node {
         const tok = self.peek() orelse break;
         if (tok.kind != .ident) return Error.Unexpected;
         self.cursor += 1;
-        const name = self.data[tok.start..tok.end];
+        const name = try self.allocator.dupe(u8, self.data[tok.start..tok.end]);
         try self.expect(.colon);
         const field = Node.Field{ .name = name, .value = try self.value() };
         try fields.append(self.allocator, field);
@@ -93,7 +112,7 @@ fn literal(self: *Parser) Error!*Node {
 
     node.* = switch (tok.kind) {
         .nil => Node.nil,
-        .string => .{ .string = self.data[tok.start + 1 .. tok.end - 1] },
+        .string => .{ .string = try self.allocator.dupe(u8, self.data[tok.start + 1 .. tok.end - 1]) },
         .integer => .{ .integer = try std.fmt.parseInt(i64, self.data[tok.start..tok.end], 10) },
         .float => .{ .float = try std.fmt.parseFloat(f64, self.data[tok.start..tok.end]) },
         .boolean => .{ .boolean = std.mem.eql(u8, "true", self.data[tok.start..tok.end]) },
@@ -148,7 +167,7 @@ fn object(self: *Parser) Error!*Node {
         const tok = try self.next();
         if (tok.kind == .rbrace) break;
         if (tok.kind != .ident) return Error.Unexpected;
-        const name = self.data[tok.start..tok.end];
+        const name = try self.allocator.dupe(u8, self.data[tok.start..tok.end]);
         try self.expect(.colon);
         const field = Node.Field{ .name = name, .value = try self.value() };
         try fields.append(self.allocator, field);
