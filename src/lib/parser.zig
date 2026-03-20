@@ -22,8 +22,13 @@ pub const Node = union(enum(u8)) {
     nil: void,
 };
 
+const Error =
+    std.mem.Allocator.Error ||
+    std.fmt.ParseFloatError ||
+    std.fmt.ParseIntError ||
+    error{Unexpected};
+
 const Handler = *const fn (*Parser) Error!*Node;
-const Error = std.mem.Allocator.Error || error{ Unexpected, InvalidCharacter, Overflow };
 const dispatch_size = std.enums.directEnumArrayLen(Tokenizer.Token.Kind, 0);
 
 const dispatch: [dispatch_size]?Handler = blk: {
