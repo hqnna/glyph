@@ -2,8 +2,6 @@ const std = @import("std");
 const Tokenizer = @import("tokenizer.zig");
 const Parser = @import("parser.zig");
 
-pub const Node = Parser.Node;
-
 /// Parse glyph-formatted text into a Zig struct of type `T`.
 ///
 /// Fields of `T` are matched by name against top-level keys in the glyph
@@ -20,10 +18,10 @@ pub fn parse(T: type, allocator: std.mem.Allocator, data: []const u8) !T {
 
 /// Parse glyph-formatted text and return the raw AST root node.
 ///
-/// Returns a pointer to the top-level `Node` (always an object for valid
+/// Returns a pointer to the top-level `Parser.Node` (always an object for valid
 /// glyph documents). The caller owns the tree and must call
 /// `node.deinit(allocator)` when finished.
-pub fn ast(allocator: std.mem.Allocator, data: []const u8) !*Node {
+pub fn ast(allocator: std.mem.Allocator, data: []const u8) !*Parser.Node {
     var tokenizer = Tokenizer.init(data);
     var parser = try Parser.init(allocator, &tokenizer);
     defer parser.deinit();
@@ -45,7 +43,7 @@ pub fn dump(T: type, allocator: std.mem.Allocator, value: T) ![]const u8 {
     return buf.toOwnedSlice(allocator);
 }
 
-fn materialize(T: type, allocator: std.mem.Allocator, node: *Node) !T {
+fn materialize(T: type, allocator: std.mem.Allocator, node: *Parser.Node) !T {
     const info = @typeInfo(T);
     if (info != .@"struct") @compileError("parse target must be a struct");
 
@@ -60,7 +58,7 @@ fn materialize(T: type, allocator: std.mem.Allocator, node: *Node) !T {
     return result;
 }
 
-fn materializeField(F: type, allocator: std.mem.Allocator, node: ?*Node) !F {
+fn materializeField(F: type, allocator: std.mem.Allocator, node: ?*Parser.Node) !F {
     const info = @typeInfo(F);
 
     if (info == .optional) {
@@ -96,7 +94,7 @@ fn materializeField(F: type, allocator: std.mem.Allocator, node: ?*Node) !F {
     };
 }
 
-fn findField(fields: []const Node.Field, name: []const u8) ?*Node {
+fn findField(fields: []const Parser.Node.Field, name: []const u8) ?*Parser.Node {
     for (fields) |f| {
         if (std.mem.eql(u8, f.name, name)) return f.value;
     }
