@@ -1,6 +1,7 @@
 const Tokenizer = @This();
 const std = @import("std");
 const v = @import("vector.zig");
+const ztracy = @import("ztracy");
 
 cursor: u32,
 data: []const u8,
@@ -36,6 +37,9 @@ pub fn init(data: []const u8) Tokenizer {
 }
 
 pub fn next(self: *Tokenizer) ?Token {
+    const zone = ztracy.ZoneNC(@src(), "Tokenizer.next", 0x00_e0_a0_40);
+    defer zone.End();
+
     if (self.cursor >= self.data.len) return null;
     return self.whitespace() orelse
         self.comment() orelse
@@ -48,6 +52,9 @@ pub fn next(self: *Tokenizer) ?Token {
 }
 
 fn identifier(self: *Tokenizer) ?Token {
+    const zone = ztracy.ZoneNC(@src(), "Tokenizer.identifier", 0x00_80_80_ff);
+    defer zone.End();
+
     if (self.cursor >= self.data.len) return null;
     if (!std.ascii.isAlphabetic(self.data[self.cursor])) return null;
 
@@ -78,6 +85,9 @@ fn identifier(self: *Tokenizer) ?Token {
 }
 
 fn whitespace(self: *Tokenizer) ?Token {
+    const zone = ztracy.ZoneNC(@src(), "Tokenizer.whitespace", 0x00_60_60_60);
+    defer zone.End();
+
     if (self.cursor >= self.data.len) return null;
     if (!std.ascii.isWhitespace(self.data[self.cursor])) return null;
 
@@ -109,6 +119,9 @@ fn whitespace(self: *Tokenizer) ?Token {
 }
 
 fn comment(self: *Tokenizer) ?Token {
+    const zone = ztracy.ZoneNC(@src(), "Tokenizer.comment", 0x00_40_a0_40);
+    defer zone.End();
+
     if (self.cursor >= self.data.len) return null;
     if (self.data[self.cursor] != '#') return null;
 
@@ -133,6 +146,9 @@ fn comment(self: *Tokenizer) ?Token {
 }
 
 fn string(self: *Tokenizer) ?Token {
+    const zone = ztracy.ZoneNC(@src(), "Tokenizer.string", 0x00_ff_a0_00);
+    defer zone.End();
+
     if (self.cursor >= self.data.len) return null;
     if (self.data[self.cursor] != '"') return null;
 
@@ -175,6 +191,9 @@ fn string(self: *Tokenizer) ?Token {
 }
 
 fn number(self: *Tokenizer) ?Token {
+    const zone = ztracy.ZoneNC(@src(), "Tokenizer.number", 0x00_a0_40_ff);
+    defer zone.End();
+
     if (self.cursor >= self.data.len) return null;
 
     var decimal = false;

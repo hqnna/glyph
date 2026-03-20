@@ -3,7 +3,12 @@
     .version = "0.0.0",
     .fingerprint = 0xabb6d7b847ac346f,
     .minimum_zig_version = "0.16.0-dev.2905+5d71e3051",
-    .dependencies = .{},
+    .dependencies = .{
+        .ztracy = .{
+            .url = "git+https://github.com/zig-gamedev/ztracy#d95d2a193b9f97944a17026c9a42b5d0f9a88c94",
+            .hash = "ztracy-0.14.0-dev-zHJSqzUHGQAmhJybhlwtl1QKevUBw4M5YKZqPfWx2y99",
+        },
+    },
     .paths = .{
         "README.md",
         "LICENSE.txt",

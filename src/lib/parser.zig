@@ -1,6 +1,7 @@
 const Parser = @This();
 const Tokenizer = @import("tokenizer.zig");
 const std = @import("std");
+const ztracy = @import("ztracy");
 
 data: []const u8,
 allocator: std.mem.Allocator,
@@ -93,6 +94,9 @@ fn expect(self: *Parser, kind: Tokenizer.Token.Kind) Error!void {
 }
 
 pub fn parse(self: *Parser) Error!*Node {
+    const zone = ztracy.ZoneNC(@src(), "Parser.parse", 0x00_ff_40_40);
+    defer zone.End();
+
     const node = try self.allocator.create(Node);
     errdefer self.allocator.destroy(node);
 
@@ -115,6 +119,9 @@ pub fn parse(self: *Parser) Error!*Node {
 }
 
 fn literal(self: *Parser) Error!*Node {
+    const zone = ztracy.ZoneNC(@src(), "Parser.literal", 0x00_ff_80_80);
+    defer zone.End();
+
     const tok = try self.next();
     const node = try self.allocator.create(Node);
     errdefer self.allocator.destroy(node);
@@ -138,12 +145,18 @@ fn literal(self: *Parser) Error!*Node {
 }
 
 fn value(self: *Parser) Error!*Node {
+    const zone = ztracy.ZoneNC(@src(), "Parser.value", 0x00_ff_60_60);
+    defer zone.End();
+
     const tok = self.peek() orelse return Error.Unexpected;
     const handler = dispatch[@intFromEnum(tok.kind)] orelse return Error.Unexpected;
     return handler(self);
 }
 
 fn array(self: *Parser) Error!*Node {
+    const zone = ztracy.ZoneNC(@src(), "Parser.array", 0x00_40_c0_ff);
+    defer zone.End();
+
     _ = try self.next(); // consume lbracket
     const node = try self.allocator.create(Node);
     errdefer self.allocator.destroy(node);
@@ -168,6 +181,9 @@ fn array(self: *Parser) Error!*Node {
 }
 
 fn object(self: *Parser) Error!*Node {
+    const zone = ztracy.ZoneNC(@src(), "Parser.object", 0x00_ff_c0_40);
+    defer zone.End();
+
     _ = try self.next();
     const node = try self.allocator.create(Node);
     errdefer self.allocator.destroy(node);

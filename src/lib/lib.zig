@@ -1,6 +1,7 @@
 const std = @import("std");
 const Tokenizer = @import("tokenizer.zig");
 const Parser = @import("parser.zig");
+const ztracy = @import("ztracy");
 
 /// Parse glyph-formatted text into a Zig struct of type `T`.
 ///
@@ -15,6 +16,9 @@ const Parser = @import("parser.zig");
 /// The caller owns the returned value and must free any allocated memory
 /// through the provided allocator.
 pub fn parse(T: type, allocator: std.mem.Allocator, data: []const u8) !T {
+    const zone = ztracy.ZoneNC(@src(), "glyph.parse", 0x00_00_cc_ff);
+    defer zone.End();
+
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
 
@@ -34,6 +38,9 @@ pub fn parse(T: type, allocator: std.mem.Allocator, data: []const u8) !T {
 /// Note: `Node.string` and `Node.Field.name` are slices into `data`.
 /// The input buffer must remain valid for the lifetime of the tree.
 pub fn ast(allocator: std.mem.Allocator, data: []const u8) !*Parser.Node {
+    const zone = ztracy.ZoneNC(@src(), "glyph.ast", 0x00_00_99_cc);
+    defer zone.End();
+
     const tokenizer = Tokenizer.init(data);
     var parser = Parser.init(allocator, tokenizer);
     return parser.parse();
@@ -48,6 +55,9 @@ pub fn ast(allocator: std.mem.Allocator, data: []const u8) !*Parser.Node {
 /// The caller owns the returned slice and must free it with the provided
 /// allocator.
 pub fn dump(T: type, allocator: std.mem.Allocator, value: T) ![]const u8 {
+    const zone = ztracy.ZoneNC(@src(), "glyph.dump", 0x00_cc_66_ff);
+    defer zone.End();
+
     var buf = try std.ArrayList(u8).initCapacity(allocator, 256);
     defer buf.deinit(allocator);
     try serialize(T, &buf, allocator, value, 0);
@@ -55,6 +65,9 @@ pub fn dump(T: type, allocator: std.mem.Allocator, value: T) ![]const u8 {
 }
 
 fn materialize(T: type, allocator: std.mem.Allocator, node: *Parser.Node) !T {
+    const zone = ztracy.ZoneNC(@src(), "materialize", 0x00_40_ff_80);
+    defer zone.End();
+
     const info = @typeInfo(T);
     if (info != .@"struct") @compileError("parse target must be a struct");
 

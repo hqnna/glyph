@@ -4,10 +4,17 @@ pub fn build(b: *std.Build) anyerror!void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const ztracy_dep = b.dependency("ztracy", .{
+        .enable_ztracy = optimize == .Debug,
+    });
+
     const library = b.addModule("glyph", .{
         .root_source_file = b.path("src/lib/lib.zig"),
         .optimize = optimize,
         .target = target,
+        .imports = &.{
+            .{ .name = "ztracy", .module = ztracy_dep.module("root") },
+        },
     });
 
     const exe = b.addExecutable(.{
@@ -20,5 +27,7 @@ pub fn build(b: *std.Build) anyerror!void {
     });
 
     exe.root_module.addImport("glyph", library);
+    exe.root_module.addImport("ztracy", ztracy_dep.module("root"));
+    exe.root_module.linkLibrary(ztracy_dep.artifact("tracy"));
     b.installArtifact(exe);
 }
