@@ -11,7 +11,7 @@ app: {
   port: 8080
   max_connections: 200
   timeout: 30.5
-  description: null
+  description: nil
 }
 
 # ── Database configuration ────────────────
@@ -25,7 +25,7 @@ database: {
   ssl: true
   pool_size: 10
   idle_timeout: 600.0
-  replica: null
+  replica: nil
 
   # Connection retry settings
   retry: {
@@ -70,7 +70,7 @@ users: [
     admin: true
     active: true
     score: 98.6
-    nickname: null
+    nickname: nil
 
     inventory: [
       "sword",
@@ -113,7 +113,7 @@ users: [
     admin: false
     active: false
     score: 0.0
-    nickname: null
+    nickname: nil
 
     # New user — inventory is empty
     inventory: []
@@ -162,5 +162,5 @@ limits: {
   max_body_size: 1048576
   request_timeout: 15.0
   enabled: true
-  burst_allowance: null
+  burst_allowance: nil
 }

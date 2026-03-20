@@ -7,7 +7,7 @@ data: []const u8,
 tokens: []const Tokenizer.Token,
 allocator: std.mem.Allocator,
 
-const Node = union(enum(u8)) {
+pub const Node = union(enum(u8)) {
     pub const Field = struct {
         name: []const u8,
         value: *Node,
@@ -23,7 +23,7 @@ const Node = union(enum(u8)) {
 };
 
 const Handler = *const fn (*Parser) Error!*Node;
-const Error = std.mem.Allocator.Error || error{Unexpected};
+const Error = std.mem.Allocator.Error || error{ Unexpected, InvalidCharacter, Overflow };
 const dispatch_size = std.enums.directEnumArrayLen(Tokenizer.Token.Kind, 0);
 
 const dispatch: [dispatch_size]?Handler = blk: {
@@ -113,13 +113,18 @@ fn array(self: *Parser) Error!*Node {
     defer values.deinit(self.allocator);
 
     while (true) {
-        const tok = try self.next();
-        if (tok.kind == .rbracket) break;
+        const tok = self.peek() orelse return Error.Unexpected;
+        if (tok.kind == .rbracket) {
+            self.cursor += 1;
+            break;
+        }
         try values.append(self.allocator, try self.value());
-        const after = try self.next();
-        if (after.kind == .comma) continue;
-        if (after.kind == .rbracket) break;
-        return Error.Unexpected;
+        const after = self.peek() orelse return Error.Unexpected;
+        if (after.kind == .comma) self.cursor += 1;
+        if (after.kind == .rbracket) {
+            self.cursor += 1;
+            break;
+        }
     }
 
     node.* = .{ .array = try values.toOwnedSlice(self.allocator) };
