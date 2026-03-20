@@ -5,3 +5,49 @@
 [justforfun]: https://img.shields.io/badge/justforfunnoreally-dev-9ff
 
 A modern configuration language with a focus on readability and performance.
+
+## Reference Implementation
+
+Glyph's reference Zig implementation takes advantage of multiple things:
+
+- **Tokenizer** - Streaming tokenizer with SIMD scanning for variable-length tokens.
+- **Parser** - Recursive descent parser with one-token lookahead, and a zero-copy AST.
+- **Serializer** - Deserializes into and serializes from structs using comptime reflection.
+
+As of [`f3a80d0`] the Zig library implementation is fully implemented and working.
+
+[`f3a80d0`]: https://github.com/hqnna/glyph/commit/f3a80d06220f0af0f5b376ce7af1d020b1fa9c80
+
+## Grammar Specification
+
+Below is a simple [PEG] grammar for Glyph's syntax, for those implementing it theirselves.
+
+[PEG]: https://en.wikipedia.org/wiki/Parsing_expression_grammar
+
+```
+File          ← Spacing Entry* EOF
+Entry         ← Key ':' Spacing Value Spacing
+
+Value         ← Object / Array / String / Float / Integer / Bool / Nil
+
+Object        ← '{' Spacing Entry* '}' Spacing
+
+Array         ← '[' Spacing ArrayBody? ']' Spacing
+ArrayBody     ← Value (CommaOrNewline Value)* CommaOrNewline?
+CommaOrNewline ← ',' Spacing / Spacing
+
+String        ← '"' StringChar* '"'
+StringChar    ← '\\' [\"nrtbf/] / !'"' .
+
+Float         ← '-'? [0-9]+ '.' [0-9]+
+Integer       ← '-'? [0-9]+
+Bool          ← 'true' / 'false'
+Nil           ← 'nil'
+
+Key           ← Spacing [a-zA-Z_] [a-zA-Z0-9_]*
+
+Spacing       ← (WS / Comment)*
+WS            ← [ \t\r\n]+
+Comment       ← '#' (!'\n' .)* '\n'?
+EOF           ← !.
+```
