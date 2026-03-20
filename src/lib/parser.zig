@@ -22,7 +22,21 @@ const Node = union(enum(u8)) {
     nil: void,
 };
 
+const Handler = *const fn (*Parser) Error!*Node;
 const Error = std.mem.Allocator.Error || error{Unexpected};
+const dispatch_size = std.enums.directEnumArrayLen(Tokenizer.Token.Kind, 0);
+
+const dispatch: [dispatch_size]?Handler = blk: {
+    var table: [dispatch_size]?Handler = .{null} ** dispatch_size;
+    table[@intFromEnum(Tokenizer.Token.Kind.lbrace)] = object;
+    table[@intFromEnum(Tokenizer.Token.Kind.lbracket)] = array;
+    table[@intFromEnum(Tokenizer.Token.Kind.nil)] = literal;
+    table[@intFromEnum(Tokenizer.Token.Kind.string)] = literal;
+    table[@intFromEnum(Tokenizer.Token.Kind.integer)] = literal;
+    table[@intFromEnum(Tokenizer.Token.Kind.float)] = literal;
+    table[@intFromEnum(Tokenizer.Token.Kind.boolean)] = literal;
+    break :blk table;
+};
 
 pub fn init(a: std.mem.Allocator, t: *Tokenizer) Error!Parser {
     var tokens = try std.ArrayList(Tokenizer.Token).initCapacity(a, 64);
@@ -46,26 +60,24 @@ pub fn deinit(self: Parser) void {
 }
 
 pub fn parse(self: *Parser) Error!*Node {
-    return self.object(true);
-}
+    const node = try self.allocator.create(Node);
+    errdefer self.allocator.destroy(node);
 
-const Handler = *const fn (*Parser) Error!*Node;
-const dispatch_size = std.enums.directEnumArrayLen(Tokenizer.Token.Kind, 0);
+    var fields = try std.ArrayList(Node.Field).initCapacity(self.allocator, 64);
+    defer fields.deinit(self.allocator);
 
-const dispatch: [dispatch_size]?Handler = blk: {
-    var table: [dispatch_size]?Handler = .{null} ** dispatch_size;
-    table[@intFromEnum(Tokenizer.Token.Kind.lbrace)] = objectValue;
-    table[@intFromEnum(Tokenizer.Token.Kind.lbracket)] = array;
-    table[@intFromEnum(Tokenizer.Token.Kind.nil)] = literal;
-    table[@intFromEnum(Tokenizer.Token.Kind.string)] = literal;
-    table[@intFromEnum(Tokenizer.Token.Kind.integer)] = literal;
-    table[@intFromEnum(Tokenizer.Token.Kind.float)] = literal;
-    table[@intFromEnum(Tokenizer.Token.Kind.boolean)] = literal;
-    break :blk table;
-};
+    while (true) {
+        const tok = self.peek() orelse break;
+        if (tok.kind != .ident) return Error.Unexpected;
+        self.cursor += 1;
+        const name = self.data[tok.start..tok.end];
+        try self.expect(.colon);
+        const field = Node.Field{ .name = name, .value = try self.value() };
+        try fields.append(self.allocator, field);
+    }
 
-fn objectValue(self: *Parser) Error!*Node {
-    return self.object(false);
+    node.* = .{ .object = try fields.toOwnedSlice(self.allocator) };
+    return node;
 }
 
 fn literal(self: *Parser) Error!*Node {
@@ -114,24 +126,24 @@ fn array(self: *Parser) Error!*Node {
     return node;
 }
 
-fn object(self: *Parser, root: bool) Error!*Node {
+fn object(self: *Parser) Error!*Node {
     const node = try self.allocator.create(Node);
     errdefer self.allocator.destroy(node);
-    if (!root) self.cursor += 1;
+    self.cursor += 1;
 
     var fields = try std.ArrayList(Node.Field).initCapacity(self.allocator, 64);
     defer fields.deinit(self.allocator);
 
     while (true) {
         const tok = try self.next();
-        if (!root and tok.kind == .rbrace) break;
+        if (tok.kind == .rbrace) break;
         if (tok.kind != .ident) return Error.Unexpected;
         const name = self.data[tok.start..tok.end];
         try self.expect(.colon);
         const field = Node.Field{ .name = name, .value = try self.value() };
         try fields.append(self.allocator, field);
-        const after = self.peek() orelse if (root) break else return Error.Unexpected;
-        if (!root and after.kind == .rbrace) {
+        const after = self.peek() orelse return Error.Unexpected;
+        if (after.kind == .rbrace) {
             self.cursor += 1;
             break;
         }
