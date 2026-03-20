@@ -49,10 +49,27 @@ pub fn parse(self: *Parser) Error!*Node {
     return self.object(true);
 }
 
-fn value(self: *Parser) Error!*Node {
-    const tok = self.peek() orelse return Error.Unexpected;
-    if (tok.kind == .lbrace) return self.object(false);
-    if (tok.kind == .lbracket) return self.array();
+const Handler = *const fn (*Parser) Error!*Node;
+const dispatch_size = std.enums.directEnumArrayLen(Tokenizer.Token.Kind, 0);
+
+const dispatch: [dispatch_size]?Handler = blk: {
+    var table: [dispatch_size]?Handler = .{null} ** dispatch_size;
+    table[@intFromEnum(Tokenizer.Token.Kind.lbrace)] = objectValue;
+    table[@intFromEnum(Tokenizer.Token.Kind.lbracket)] = array;
+    table[@intFromEnum(Tokenizer.Token.Kind.nil)] = literal;
+    table[@intFromEnum(Tokenizer.Token.Kind.string)] = literal;
+    table[@intFromEnum(Tokenizer.Token.Kind.integer)] = literal;
+    table[@intFromEnum(Tokenizer.Token.Kind.float)] = literal;
+    table[@intFromEnum(Tokenizer.Token.Kind.boolean)] = literal;
+    break :blk table;
+};
+
+fn objectValue(self: *Parser) Error!*Node {
+    return self.object(false);
+}
+
+fn literal(self: *Parser) Error!*Node {
+    const tok = self.tokens[self.cursor];
     const node = try self.allocator.create(Node);
     errdefer self.allocator.destroy(node);
     self.cursor += 1;
@@ -67,6 +84,12 @@ fn value(self: *Parser) Error!*Node {
     };
 
     return node;
+}
+
+fn value(self: *Parser) Error!*Node {
+    const tok = self.peek() orelse return Error.Unexpected;
+    const handler = dispatch[@intFromEnum(tok.kind)] orelse return Error.Unexpected;
+    return handler(self);
 }
 
 fn array(self: *Parser) Error!*Node {
