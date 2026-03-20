@@ -33,8 +33,7 @@ Value         ← Object / Array / String / Float / Integer / Bool / Nil
 Object        ← '{' Spacing Entry* '}' Spacing
 
 Array         ← '[' Spacing ArrayBody? ']' Spacing
-ArrayBody     ← Value (CommaOrNewline Value)* CommaOrNewline?
-CommaOrNewline ← ',' Spacing / Spacing
+ArrayBody     ← Value (',' Spacing Value)* ','? Spacing
 
 String        ← '"' StringChar* '"'
 StringChar    ← '\\' [\"nrtbf/] / !'"' .
