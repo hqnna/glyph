@@ -159,11 +159,8 @@ fn array(self: *Parser) Error!*Node {
         }
         try values.append(self.allocator, try self.value());
         const after = self.peek() orelse return Error.Unexpected;
-        if (after.kind == .comma) _ = try self.next();
-        if (after.kind == .rbracket) {
-            _ = try self.next();
-            break;
-        }
+        if (after.kind == .rbracket) continue;
+        try self.expect(.comma);
     }
 
     node.* = .{ .array = try values.toOwnedSlice(self.allocator) };
