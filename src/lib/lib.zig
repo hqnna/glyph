@@ -8,23 +8,34 @@ const Parser = @import("parser.zig");
 /// document. Supports booleans, integers, floats, optional types, strings,
 /// slices of strings, and nested structs.
 ///
+/// The AST is built on an internal arena and freed immediately after
+/// materialization — only the final struct lands in `allocator`. Peak RSS
+/// is roughly: input size + one arena slab + output struct.
+///
 /// The caller owns the returned value and must free any allocated memory
 /// through the provided allocator.
 pub fn parse(T: type, allocator: std.mem.Allocator, data: []const u8) !T {
-    var root = try ast(allocator, data);
-    defer root.deinit(allocator);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    const tokenizer = Tokenizer.init(data);
+    var parser = Parser.init(arena.allocator(), tokenizer);
+    const root = try parser.parse();
+
     return materialize(T, allocator, root);
 }
 
 /// Parse glyph-formatted text and return the raw AST root node.
 ///
-/// Returns a pointer to the top-level `Parser.Node` (always an object for valid
-/// glyph documents). The caller owns the tree and must call
+/// Returns a pointer to the top-level `Parser.Node` (always an object for
+/// valid glyph documents). The caller owns the tree and must call
 /// `node.deinit(allocator)` when finished.
+///
+/// Note: `Node.string` and `Node.Field.name` are slices into `data`.
+/// The input buffer must remain valid for the lifetime of the tree.
 pub fn ast(allocator: std.mem.Allocator, data: []const u8) !*Parser.Node {
-    var tokenizer = Tokenizer.init(data);
-    var parser = try Parser.init(allocator, &tokenizer);
-    defer parser.deinit();
+    const tokenizer = Tokenizer.init(data);
+    var parser = Parser.init(allocator, tokenizer);
     return parser.parse();
 }
 

@@ -2,7 +2,7 @@ const Tokenizer = @This();
 const std = @import("std");
 const v = @import("vector.zig");
 
-cursor: usize,
+cursor: u32,
 data: []const u8,
 
 const Scan = enum { cont, end, fail };
@@ -26,8 +26,9 @@ pub const Token = struct {
     };
 
     kind: Kind,
-    start: usize,
-    end: usize,
+    escapes: bool,
+    start: u32,
+    end: u32,
 };
 
 pub fn init(data: []const u8) Tokenizer {
@@ -64,7 +65,7 @@ fn identifier(self: *Tokenizer) ?Token {
 
         if (mask != std.math.maxInt(v.Bits)) {
             self.cursor += @ctz(~mask);
-            return Token{ .kind = .ident, .start = start, .end = self.cursor };
+            return Token{ .kind = .ident, .escapes = false, .start = start, .end = self.cursor };
         }
     }
 
@@ -73,7 +74,7 @@ fn identifier(self: *Tokenizer) ?Token {
         if (!std.ascii.isAlphanumeric(self.data[self.cursor])) break;
     }
 
-    return Token{ .kind = .ident, .start = start, .end = self.cursor };
+    return Token{ .kind = .ident, .escapes = false, .start = start, .end = self.cursor };
 }
 
 fn whitespace(self: *Tokenizer) ?Token {
@@ -96,7 +97,7 @@ fn whitespace(self: *Tokenizer) ?Token {
 
         if (mask != std.math.maxInt(v.Bits)) {
             self.cursor += @ctz(~mask);
-            return Token{ .kind = .whitespace, .start = start, .end = self.cursor };
+            return Token{ .kind = .whitespace, .escapes = false, .start = start, .end = self.cursor };
         }
     }
 
@@ -104,7 +105,7 @@ fn whitespace(self: *Tokenizer) ?Token {
         if (!std.ascii.isWhitespace(self.data[self.cursor])) break;
     }
 
-    return Token{ .kind = .whitespace, .start = start, .end = self.cursor };
+    return Token{ .kind = .whitespace, .escapes = false, .start = start, .end = self.cursor };
 }
 
 fn comment(self: *Tokenizer) ?Token {
@@ -120,7 +121,7 @@ fn comment(self: *Tokenizer) ?Token {
 
         if (mask != 0) {
             self.cursor += @ctz(mask);
-            return Token{ .kind = .comment, .start = start, .end = self.cursor };
+            return Token{ .kind = .comment, .escapes = false, .start = start, .end = self.cursor };
         }
     }
 
@@ -128,7 +129,7 @@ fn comment(self: *Tokenizer) ?Token {
         if (self.data[self.cursor] == '\n') break;
     }
 
-    return Token{ .kind = .comment, .start = start, .end = self.cursor };
+    return Token{ .kind = .comment, .escapes = false, .start = start, .end = self.cursor };
 }
 
 fn string(self: *Tokenizer) ?Token {
@@ -137,6 +138,7 @@ fn string(self: *Tokenizer) ?Token {
 
     const start = self.cursor;
     self.cursor += 1;
+    var has_escapes = false;
 
     while (self.cursor + v.length <= self.data.len) {
         const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
@@ -148,8 +150,8 @@ fn string(self: *Tokenizer) ?Token {
 
         if (mask != 0) {
             self.cursor += @ctz(mask);
-            switch (self.stringStop()) {
-                .end => return Token{ .kind = .string, .start = start, .end = self.cursor },
+            switch (self.stringStop(&has_escapes)) {
+                .end => return Token{ .kind = .string, .escapes = has_escapes, .start = start, .end = self.cursor },
                 .cont => continue,
                 .fail => return null,
             }
@@ -160,8 +162,8 @@ fn string(self: *Tokenizer) ?Token {
 
     while (self.cursor < self.data.len) {
         switch (self.data[self.cursor]) {
-            '"', '\\', '\n' => switch (self.stringStop()) {
-                .end => return Token{ .kind = .string, .start = start, .end = self.cursor },
+            '"', '\\', '\n' => switch (self.stringStop(&has_escapes)) {
+                .end => return Token{ .kind = .string, .escapes = has_escapes, .start = start, .end = self.cursor },
                 .fail => return null,
                 .cont => {},
             },
@@ -204,7 +206,7 @@ fn number(self: *Tokenizer) ?Token {
                 .cont => continue,
                 .end => {
                     const kind: Token.Kind = if (decimal or exponent) .float else .integer;
-                    return Token{ .kind = kind, .start = start, .end = self.cursor };
+                    return Token{ .kind = kind, .escapes = false, .start = start, .end = self.cursor };
                 },
                 .fail => return null,
             }
@@ -219,7 +221,7 @@ fn number(self: *Tokenizer) ?Token {
                 .cont => {},
                 .end => {
                     const kind: Token.Kind = if (decimal or exponent) .float else .integer;
-                    return Token{ .kind = kind, .start = start, .end = self.cursor };
+                    return Token{ .kind = kind, .escapes = false, .start = start, .end = self.cursor };
                 },
                 .fail => return null,
             }
@@ -227,7 +229,7 @@ fn number(self: *Tokenizer) ?Token {
     }
 
     const kind: Token.Kind = if (decimal or exponent) .float else .integer;
-    return Token{ .kind = kind, .start = start, .end = self.cursor };
+    return Token{ .kind = kind, .escapes = false, .start = start, .end = self.cursor };
 }
 
 fn symbol(self: *Tokenizer) ?Token {
@@ -246,7 +248,7 @@ fn symbol(self: *Tokenizer) ?Token {
     const start = self.cursor;
     self.cursor += 1;
 
-    return Token{ .kind = kind, .start = start, .end = self.cursor };
+    return Token{ .kind = kind, .escapes = false, .start = start, .end = self.cursor };
 }
 
 fn boolean(self: *Tokenizer) ?Token {
@@ -261,7 +263,7 @@ fn boolean(self: *Tokenizer) ?Token {
             if (self.data[end] == '_') return null;
         }
         self.cursor = end;
-        return Token{ .kind = .boolean, .start = start, .end = self.cursor };
+        return Token{ .kind = .boolean, .escapes = false, .start = start, .end = self.cursor };
     }
 
     if (std.mem.startsWith(u8, self.data[self.cursor..], "false")) {
@@ -271,7 +273,7 @@ fn boolean(self: *Tokenizer) ?Token {
             if (self.data[end] == '_') return null;
         }
         self.cursor = end;
-        return Token{ .kind = .boolean, .start = start, .end = self.cursor };
+        return Token{ .kind = .boolean, .escapes = false, .start = start, .end = self.cursor };
     }
 
     return null;
@@ -290,10 +292,10 @@ fn nil(self: *Tokenizer) ?Token {
     }
 
     self.cursor = end;
-    return Token{ .kind = .nil, .start = start, .end = self.cursor };
+    return Token{ .kind = .nil, .escapes = false, .start = start, .end = self.cursor };
 }
 
-inline fn stringStop(self: *Tokenizer) Scan {
+inline fn stringStop(self: *Tokenizer, has_escapes: *bool) Scan {
     switch (self.data[self.cursor]) {
         '"' => {
             self.cursor += 1;
@@ -301,6 +303,7 @@ inline fn stringStop(self: *Tokenizer) Scan {
         },
         '\\' => {
             if (self.cursor + 1 >= self.data.len) return .fail;
+            has_escapes.* = true;
             self.cursor += 2;
             return .cont;
         },

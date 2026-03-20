@@ -2,10 +2,10 @@ const Parser = @This();
 const Tokenizer = @import("tokenizer.zig");
 const std = @import("std");
 
-cursor: usize,
 data: []const u8,
-tokens: []const Tokenizer.Token,
 allocator: std.mem.Allocator,
+tokenizer: Tokenizer,
+current: ?Tokenizer.Token,
 
 pub const Node = union(enum(u8)) {
     pub const Field = struct {
@@ -24,17 +24,13 @@ pub const Node = union(enum(u8)) {
     pub fn deinit(self: *Node, allocator: std.mem.Allocator) void {
         switch (self.*) {
             .object => |fields| {
-                for (fields) |field| {
-                    allocator.free(field.name);
-                    field.value.deinit(allocator);
-                }
+                for (fields) |field| field.value.deinit(allocator);
                 allocator.free(fields);
             },
             .array => |items| {
                 for (items) |item| item.deinit(allocator);
                 allocator.free(items);
             },
-            .string => |s| allocator.free(s),
             else => {},
         }
         allocator.destroy(self);
@@ -62,42 +58,56 @@ const dispatch: [dispatch_size]?Handler = blk: {
     break :blk table;
 };
 
-pub fn init(a: std.mem.Allocator, t: *Tokenizer) Error!Parser {
-    var tokens = try std.ArrayList(Tokenizer.Token).initCapacity(a, 64);
-    defer tokens.deinit(a);
-
-    while (t.next()) |tok| {
-        if (tok.kind == .whitespace or tok.kind == .comment) continue;
-        try tokens.append(a, tok);
-    }
-
-    return .{
-        .cursor = 0,
-        .data = t.data,
-        .tokens = try tokens.toOwnedSlice(a),
-        .allocator = a,
+pub fn init(allocator: std.mem.Allocator, tokenizer: Tokenizer) Parser {
+    var self = Parser{
+        .data = tokenizer.data,
+        .allocator = allocator,
+        .tokenizer = tokenizer,
+        .current = null,
     };
+    self.current = self.nextRaw();
+    return self;
 }
 
-pub fn deinit(self: Parser) void {
-    self.allocator.free(self.tokens);
+fn nextRaw(self: *Parser) ?Tokenizer.Token {
+    while (self.tokenizer.next()) |tok| {
+        if (tok.kind == .whitespace or tok.kind == .comment) continue;
+        return tok;
+    }
+    return null;
+}
+
+fn next(self: *Parser) Error!Tokenizer.Token {
+    const tok = self.current orelse return Error.Unexpected;
+    self.current = self.nextRaw();
+    return tok;
+}
+
+fn peek(self: *Parser) ?Tokenizer.Token {
+    return self.current;
+}
+
+fn expect(self: *Parser, kind: Tokenizer.Token.Kind) Error!void {
+    const tok = try self.next();
+    if (tok.kind != kind) return Error.Unexpected;
 }
 
 pub fn parse(self: *Parser) Error!*Node {
     const node = try self.allocator.create(Node);
     errdefer self.allocator.destroy(node);
 
-    var fields = try std.ArrayList(Node.Field).initCapacity(self.allocator, 64);
+    var fields = try std.ArrayList(Node.Field).initCapacity(self.allocator, 8);
     defer fields.deinit(self.allocator);
 
     while (true) {
         const tok = self.peek() orelse break;
         if (tok.kind != .ident) return Error.Unexpected;
-        self.cursor += 1;
-        const name = try self.allocator.dupe(u8, self.data[tok.start..tok.end]);
+        _ = try self.next();
+
+        // Slice directly into the input buffer — no allocation.
+        const name = self.data[tok.start..tok.end];
         try self.expect(.colon);
-        const field = Node.Field{ .name = name, .value = try self.value() };
-        try fields.append(self.allocator, field);
+        try fields.append(self.allocator, .{ .name = name, .value = try self.value() });
     }
 
     node.* = .{ .object = try fields.toOwnedSlice(self.allocator) };
@@ -105,17 +115,22 @@ pub fn parse(self: *Parser) Error!*Node {
 }
 
 fn literal(self: *Parser) Error!*Node {
-    const tok = self.tokens[self.cursor];
+    const tok = try self.next();
     const node = try self.allocator.create(Node);
     errdefer self.allocator.destroy(node);
-    self.cursor += 1;
 
     node.* = switch (tok.kind) {
-        .nil => Node.nil,
-        .string => .{ .string = try self.allocator.dupe(u8, self.data[tok.start + 1 .. tok.end - 1]) },
+        .nil => .nil,
+        .string => blk: {
+            const raw = self.data[tok.start + 1 .. tok.end - 1];
+            break :blk .{ .string = if (tok.escapes)
+                try unescape(self.allocator, raw)
+            else
+                raw };
+        },
         .integer => .{ .integer = try std.fmt.parseInt(i64, self.data[tok.start..tok.end], 10) },
         .float => .{ .float = try std.fmt.parseFloat(f64, self.data[tok.start..tok.end]) },
-        .boolean => .{ .boolean = std.mem.eql(u8, "true", self.data[tok.start..tok.end]) },
+        .boolean => .{ .boolean = self.data[tok.start] == 't' },
         else => return Error.Unexpected,
     };
 
@@ -129,24 +144,24 @@ fn value(self: *Parser) Error!*Node {
 }
 
 fn array(self: *Parser) Error!*Node {
+    _ = try self.next(); // consume lbracket
     const node = try self.allocator.create(Node);
     errdefer self.allocator.destroy(node);
-    self.cursor += 1;
 
-    var values = try std.ArrayList(*Node).initCapacity(self.allocator, 64);
+    var values = try std.ArrayList(*Node).initCapacity(self.allocator, 8);
     defer values.deinit(self.allocator);
 
     while (true) {
         const tok = self.peek() orelse return Error.Unexpected;
         if (tok.kind == .rbracket) {
-            self.cursor += 1;
+            _ = try self.next();
             break;
         }
         try values.append(self.allocator, try self.value());
         const after = self.peek() orelse return Error.Unexpected;
-        if (after.kind == .comma) self.cursor += 1;
+        if (after.kind == .comma) _ = try self.next();
         if (after.kind == .rbracket) {
-            self.cursor += 1;
+            _ = try self.next();
             break;
         }
     }
@@ -156,24 +171,25 @@ fn array(self: *Parser) Error!*Node {
 }
 
 fn object(self: *Parser) Error!*Node {
+    _ = try self.next();
     const node = try self.allocator.create(Node);
     errdefer self.allocator.destroy(node);
-    self.cursor += 1;
 
-    var fields = try std.ArrayList(Node.Field).initCapacity(self.allocator, 64);
+    var fields = try std.ArrayList(Node.Field).initCapacity(self.allocator, 8);
     defer fields.deinit(self.allocator);
 
     while (true) {
         const tok = try self.next();
         if (tok.kind == .rbrace) break;
         if (tok.kind != .ident) return Error.Unexpected;
-        const name = try self.allocator.dupe(u8, self.data[tok.start..tok.end]);
+
+        const name = self.data[tok.start..tok.end];
         try self.expect(.colon);
-        const field = Node.Field{ .name = name, .value = try self.value() };
-        try fields.append(self.allocator, field);
+        try fields.append(self.allocator, .{ .name = name, .value = try self.value() });
+
         const after = self.peek() orelse return Error.Unexpected;
         if (after.kind == .rbrace) {
-            self.cursor += 1;
+            _ = try self.next();
             break;
         }
     }
@@ -182,20 +198,30 @@ fn object(self: *Parser) Error!*Node {
     return node;
 }
 
-fn next(self: *Parser) Error!Tokenizer.Token {
-    if (self.cursor >= self.tokens.len) return Error.Unexpected;
-    const token = self.tokens[self.cursor];
-    self.cursor += 1;
-    return token;
-}
+fn unescape(allocator: std.mem.Allocator, raw: []const u8) Error![]const u8 {
+    var buf = try std.ArrayList(u8).initCapacity(allocator, raw.len);
+    defer buf.deinit(allocator);
 
-fn peek(self: Parser) ?Tokenizer.Token {
-    if (self.cursor >= self.tokens.len) return null;
-    return self.tokens[self.cursor];
-}
+    var i: usize = 0;
+    while (i < raw.len) {
+        if (raw[i] != '\\') {
+            try buf.append(allocator, raw[i]);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        if (i >= raw.len) return Error.Unexpected;
+        const escaped: u8 = switch (raw[i]) {
+            'n' => '\n',
+            't' => '\t',
+            'r' => '\r',
+            '"' => '"',
+            '\\' => '\\',
+            else => return Error.Unexpected,
+        };
+        try buf.append(allocator, escaped);
+        i += 1;
+    }
 
-fn expect(self: *Parser, kind: Tokenizer.Token.Kind) Error!void {
-    if (self.cursor >= self.tokens.len) return Error.Unexpected;
-    if (self.tokens[self.cursor].kind != kind) return Error.Unexpected;
-    self.cursor += 1;
+    return buf.toOwnedSlice(allocator);
 }
