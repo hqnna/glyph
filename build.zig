@@ -4,9 +4,8 @@ pub fn build(b: *std.Build) anyerror!void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const ztracy_dep = b.dependency("ztracy", .{
-        .enable_ztracy = optimize == .Debug,
-    });
+    const enable_tracy = b.option(bool, "tracy", "Enable the tracy profiler");
+    const ztracy_dep = b.dependency("ztracy", .{ .enable_ztracy = enable_tracy orelse false });
 
     const library = b.addModule("glyph", .{
         .root_source_file = b.path("src/lib/lib.zig"),
