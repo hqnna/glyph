@@ -1,21 +1,16 @@
 const Tokenizer = @This();
 const std = @import("std");
 const v = @import("vector.zig");
-const ztracy = @import("ztracy");
 
 cursor: u32,
 data: []const u8,
 
-const Scan = enum { cont, end, fail };
-
 pub const Token = struct {
     pub const Kind = enum(u8) {
         ident,
-        whitespace,
         boolean,
         lbracket,
         rbracket,
-        comment,
         string,
         integer,
         float,
@@ -32,100 +27,92 @@ pub const Token = struct {
     end: u32,
 };
 
+const CharClass = enum(u8) {
+    ws,
+    comment,
+    alpha,
+    digit,
+    quote,
+    lbrace,
+    rbrace,
+    lbracket,
+    rbracket,
+    colon,
+    comma,
+    minus,
+    other,
+};
+
+const class_table: [256]CharClass = blk: {
+    var table: [256]CharClass = .{.other} ** 256;
+    table[' '] = .ws;
+    table['\t'] = .ws;
+    table['\r'] = .ws;
+    table['\n'] = .ws;
+    table['#'] = .comment;
+    table['"'] = .quote;
+    table['{'] = .lbrace;
+    table['}'] = .rbrace;
+    table['['] = .lbracket;
+    table[']'] = .rbracket;
+    table[':'] = .colon;
+    table[','] = .comma;
+    table['-'] = .minus;
+    for ('a'..('z' + 1)) |c| table[c] = .alpha;
+    for ('A'..('Z' + 1)) |c| table[c] = .alpha;
+    table['_'] = .alpha;
+    for ('0'..('9' + 1)) |c| table[c] = .digit;
+    break :blk table;
+};
+
 pub fn init(data: []const u8) Tokenizer {
     return .{ .cursor = 0, .data = data };
 }
 
 pub fn next(self: *Tokenizer) ?Token {
-    const zone = ztracy.ZoneNC(@src(), "Tokenizer.next", 0x00_e0_a0_40);
-    defer zone.End();
-
-    if (self.cursor >= self.data.len) return null;
-    return self.whitespace() orelse
-        self.comment() orelse
-        self.symbol() orelse
-        self.string() orelse
-        self.number() orelse
-        self.boolean() orelse
-        self.nil() orelse
-        self.identifier();
+    while (self.cursor < self.data.len) {
+        switch (class_table[self.data[self.cursor]]) {
+            .ws => self.skipWhitespace(),
+            .comment => self.skipComment(),
+            .alpha => return self.scanWord(),
+            .digit, .minus => return self.scanNumber(),
+            .quote => return self.scanString(),
+            .lbrace => return self.scanSymbol(.lbrace),
+            .rbrace => return self.scanSymbol(.rbrace),
+            .lbracket => return self.scanSymbol(.lbracket),
+            .rbracket => return self.scanSymbol(.rbracket),
+            .colon => return self.scanSymbol(.colon),
+            .comma => return self.scanSymbol(.comma),
+            .other => return null,
+        }
+    }
+    return null;
 }
 
-fn identifier(self: *Tokenizer) ?Token {
-    const zone = ztracy.ZoneNC(@src(), "Tokenizer.identifier", 0x00_80_80_ff);
-    defer zone.End();
-
-    if (self.cursor >= self.data.len) return null;
-    if (!std.ascii.isAlphabetic(self.data[self.cursor])) return null;
-
+inline fn scanSymbol(self: *Tokenizer, kind: Token.Kind) Token {
     const start = self.cursor;
+    self.cursor += 1;
+    return .{ .kind = kind, .escapes = false, .start = start, .end = self.cursor };
+}
+
+fn skipWhitespace(self: *Tokenizer) void {
     self.cursor += 1;
 
     while (self.cursor + v.length <= self.data.len) : (self.cursor += v.length) {
         const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
-
-        const is_alpha = v.isAlpha(chunk);
-        const is_digit = v.isDigit(chunk);
-        const is_under = v.is(chunk, '_');
-        const valid = is_alpha | is_digit | is_under;
-        const mask = @as(v.Bits, @bitCast(valid));
+        const mask = @as(v.Bits, @bitCast(v.isWhitespace(chunk)));
 
         if (mask != std.math.maxInt(v.Bits)) {
             self.cursor += @ctz(~mask);
-            return Token{ .kind = .ident, .escapes = false, .start = start, .end = self.cursor };
+            return;
         }
     }
 
-    while (self.cursor < self.data.len) : (self.cursor += 1) {
-        if (self.data[self.cursor] == '_') continue;
-        if (!std.ascii.isAlphanumeric(self.data[self.cursor])) break;
-    }
-
-    return Token{ .kind = .ident, .escapes = false, .start = start, .end = self.cursor };
+    while (self.cursor < self.data.len and std.ascii.isWhitespace(self.data[self.cursor]))
+        self.cursor += 1;
 }
 
-fn whitespace(self: *Tokenizer) ?Token {
-    const zone = ztracy.ZoneNC(@src(), "Tokenizer.whitespace", 0x00_60_60_60);
-    defer zone.End();
-
-    if (self.cursor >= self.data.len) return null;
-    if (!std.ascii.isWhitespace(self.data[self.cursor])) return null;
-
-    const start = self.cursor;
-    self.cursor += 1;
-
-    while (self.cursor + v.length <= self.data.len) : (self.cursor += v.length) {
-        const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
-
-        const is_space = v.is(chunk, ' ');
-        const is_return = v.is(chunk, '\r');
-        const is_newline = v.is(chunk, '\n');
-        const is_tab = v.is(chunk, '\t');
-
-        const valid = is_space | is_tab | is_return | is_newline;
-        const mask = @as(v.Bits, @bitCast(valid));
-
-        if (mask != std.math.maxInt(v.Bits)) {
-            self.cursor += @ctz(~mask);
-            return Token{ .kind = .whitespace, .escapes = false, .start = start, .end = self.cursor };
-        }
-    }
-
-    while (self.cursor < self.data.len) : (self.cursor += 1) {
-        if (!std.ascii.isWhitespace(self.data[self.cursor])) break;
-    }
-
-    return Token{ .kind = .whitespace, .escapes = false, .start = start, .end = self.cursor };
-}
-
-fn comment(self: *Tokenizer) ?Token {
-    const zone = ztracy.ZoneNC(@src(), "Tokenizer.comment", 0x00_40_a0_40);
-    defer zone.End();
-
-    if (self.cursor >= self.data.len) return null;
-    if (self.data[self.cursor] != '#') return null;
-
-    const start = self.cursor;
+fn skipComment(self: *Tokenizer) void {
     self.cursor += 1;
 
     while (self.cursor + v.length <= self.data.len) : (self.cursor += v.length) {
@@ -134,55 +121,93 @@ fn comment(self: *Tokenizer) ?Token {
 
         if (mask != 0) {
             self.cursor += @ctz(mask);
-            return Token{ .kind = .comment, .escapes = false, .start = start, .end = self.cursor };
+            return;
+        }
+    }
+
+    while (self.cursor < self.data.len and self.data[self.cursor] != '\n')
+        self.cursor += 1;
+}
+
+fn scanWord(self: *Tokenizer) Token {
+    const start = self.cursor;
+    self.cursor += 1;
+
+    while (self.cursor + v.length <= self.data.len) : (self.cursor += v.length) {
+        const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
+        const valid = v.isAlpha(chunk) | v.isDigit(chunk) | v.is(chunk, '_');
+        const mask = @as(v.Bits, @bitCast(valid));
+
+        if (mask != std.math.maxInt(v.Bits)) {
+            self.cursor += @ctz(~mask);
+            return self.classifyWord(start);
         }
     }
 
     while (self.cursor < self.data.len) : (self.cursor += 1) {
-        if (self.data[self.cursor] == '\n') break;
+        const c = self.data[self.cursor];
+        if (c == '_') continue;
+        if (!std.ascii.isAlphanumeric(c)) break;
     }
 
-    return Token{ .kind = .comment, .escapes = false, .start = start, .end = self.cursor };
+    return self.classifyWord(start);
 }
 
-fn string(self: *Tokenizer) ?Token {
-    const zone = ztracy.ZoneNC(@src(), "Tokenizer.string", 0x00_ff_a0_00);
-    defer zone.End();
+inline fn classifyWord(self: *const Tokenizer, start: u32) Token {
+    const len = self.cursor - start;
+    const word = self.data[start..self.cursor];
 
-    if (self.cursor >= self.data.len) return null;
-    if (self.data[self.cursor] != '"') return null;
+    const kind: Token.Kind = switch (len) {
+        3 => if (word[0] == 'n' and word[1] == 'i' and word[2] == 'l') .nil else .ident,
+        4 => if (word[0] == 't' and word[1] == 'r' and word[2] == 'u' and word[3] == 'e') .boolean else .ident,
+        5 => if (word[0] == 'f' and word[1] == 'a' and word[2] == 'l' and word[3] == 's' and word[4] == 'e') .boolean else .ident,
+        else => .ident,
+    };
 
+    return .{ .kind = kind, .escapes = false, .start = start, .end = self.cursor };
+}
+
+fn scanString(self: *Tokenizer) ?Token {
     const start = self.cursor;
     self.cursor += 1;
     var has_escapes = false;
 
     while (self.cursor + v.length <= self.data.len) {
         const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
-
-        const is_quote = v.is(chunk, '"');
-        const is_escape = v.is(chunk, '\\');
-        const is_newline = v.is(chunk, '\n');
-        const mask = @as(v.Bits, @bitCast(is_quote | is_escape | is_newline));
+        const mask = @as(v.Bits, @bitCast(v.is(chunk, '"') | v.is(chunk, '\\') | v.is(chunk, '\n')));
 
         if (mask != 0) {
             self.cursor += @ctz(mask);
-            switch (self.stringStop(&has_escapes)) {
-                .end => return Token{ .kind = .string, .escapes = has_escapes, .start = start, .end = self.cursor },
-                .cont => continue,
-                .fail => return null,
+            switch (self.data[self.cursor]) {
+                '"' => {
+                    self.cursor += 1;
+                    return .{ .kind = .string, .escapes = has_escapes, .start = start, .end = self.cursor };
+                },
+                '\\' => {
+                    if (self.cursor + 1 >= self.data.len) return null;
+                    has_escapes = true;
+                    self.cursor += 2;
+                },
+                '\n' => return null,
+                else => unreachable,
             }
+        } else {
+            self.cursor += v.length;
         }
-
-        self.cursor += v.length;
     }
 
     while (self.cursor < self.data.len) {
         switch (self.data[self.cursor]) {
-            '"', '\\', '\n' => switch (self.stringStop(&has_escapes)) {
-                .end => return Token{ .kind = .string, .escapes = has_escapes, .start = start, .end = self.cursor },
-                .fail => return null,
-                .cont => {},
+            '"' => {
+                self.cursor += 1;
+                return .{ .kind = .string, .escapes = has_escapes, .start = start, .end = self.cursor };
             },
+            '\\' => {
+                if (self.cursor + 1 >= self.data.len) return null;
+                has_escapes = true;
+                self.cursor += 2;
+            },
+            '\n' => return null,
             else => self.cursor += 1,
         }
     }
@@ -190,146 +215,66 @@ fn string(self: *Tokenizer) ?Token {
     return null;
 }
 
-fn number(self: *Tokenizer) ?Token {
-    const zone = ztracy.ZoneNC(@src(), "Tokenizer.number", 0x00_a0_40_ff);
-    defer zone.End();
-
-    if (self.cursor >= self.data.len) return null;
-
+fn scanNumber(self: *Tokenizer) ?Token {
+    const start = self.cursor;
     var decimal = false;
     var exponent = false;
-    const start = self.cursor;
 
     if (self.data[self.cursor] == '-') {
         self.cursor += 1;
-        if (self.cursor >= self.data.len) return null;
-        if (!std.ascii.isDigit(self.data[self.cursor])) {
+        if (self.cursor >= self.data.len or !std.ascii.isDigit(self.data[self.cursor])) {
             self.cursor = start;
             return null;
         }
-    } else if (!std.ascii.isDigit(self.data[self.cursor])) {
-        return null;
     }
 
     self.cursor += 1;
 
     while (self.cursor + v.length <= self.data.len) {
         const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
-
-        const is_digit = v.isDigit(chunk);
-        const mask = @as(v.Bits, @bitCast(~is_digit));
+        const mask = @as(v.Bits, @bitCast(~v.isDigit(chunk)));
 
         if (mask != 0) {
             self.cursor += @ctz(mask);
             switch (self.numberStop(&decimal, &exponent)) {
                 .cont => continue,
-                .end => {
-                    const kind: Token.Kind = if (decimal or exponent) .float else .integer;
-                    return Token{ .kind = kind, .escapes = false, .start = start, .end = self.cursor };
+                .end => return .{
+                    .kind = if (decimal or exponent) .float else .integer,
+                    .escapes = false,
+                    .start = start,
+                    .end = self.cursor,
                 },
                 .fail => return null,
             }
+        } else {
+            self.cursor += v.length;
         }
-
-        self.cursor += v.length;
     }
 
     while (self.cursor < self.data.len) : (self.cursor += 1) {
         if (!std.ascii.isDigit(self.data[self.cursor])) {
             switch (self.numberStop(&decimal, &exponent)) {
                 .cont => {},
-                .end => {
-                    const kind: Token.Kind = if (decimal or exponent) .float else .integer;
-                    return Token{ .kind = kind, .escapes = false, .start = start, .end = self.cursor };
+                .end => return .{
+                    .kind = if (decimal or exponent) .float else .integer,
+                    .escapes = false,
+                    .start = start,
+                    .end = self.cursor,
                 },
                 .fail => return null,
             }
         }
     }
 
-    const kind: Token.Kind = if (decimal or exponent) .float else .integer;
-    return Token{ .kind = kind, .escapes = false, .start = start, .end = self.cursor };
-}
-
-fn symbol(self: *Tokenizer) ?Token {
-    if (self.cursor >= self.data.len) return null;
-
-    const kind: Token.Kind = switch (self.data[self.cursor]) {
-        '{' => .lbrace,
-        '}' => .rbrace,
-        '[' => .lbracket,
-        ']' => .rbracket,
-        ':' => .colon,
-        ',' => .comma,
-        else => return null,
+    return .{
+        .kind = if (decimal or exponent) .float else .integer,
+        .escapes = false,
+        .start = start,
+        .end = self.cursor,
     };
-
-    const start = self.cursor;
-    self.cursor += 1;
-
-    return Token{ .kind = kind, .escapes = false, .start = start, .end = self.cursor };
 }
 
-fn boolean(self: *Tokenizer) ?Token {
-    if (self.cursor >= self.data.len) return null;
-
-    const start = self.cursor;
-
-    if (std.mem.startsWith(u8, self.data[self.cursor..], "true")) {
-        const end = self.cursor + 4;
-        if (end < self.data.len) {
-            if (std.ascii.isAlphanumeric(self.data[end])) return null;
-            if (self.data[end] == '_') return null;
-        }
-        self.cursor = end;
-        return Token{ .kind = .boolean, .escapes = false, .start = start, .end = self.cursor };
-    }
-
-    if (std.mem.startsWith(u8, self.data[self.cursor..], "false")) {
-        const end = self.cursor + 5;
-        if (end < self.data.len) {
-            if (std.ascii.isAlphanumeric(self.data[end])) return null;
-            if (self.data[end] == '_') return null;
-        }
-        self.cursor = end;
-        return Token{ .kind = .boolean, .escapes = false, .start = start, .end = self.cursor };
-    }
-
-    return null;
-}
-
-fn nil(self: *Tokenizer) ?Token {
-    if (self.cursor >= self.data.len) return null;
-    if (!std.mem.startsWith(u8, self.data[self.cursor..], "nil")) return null;
-
-    const start = self.cursor;
-    const end = self.cursor + 3;
-
-    if (end < self.data.len) {
-        if (std.ascii.isAlphanumeric(self.data[end])) return null;
-        if (self.data[end] == '_') return null;
-    }
-
-    self.cursor = end;
-    return Token{ .kind = .nil, .escapes = false, .start = start, .end = self.cursor };
-}
-
-inline fn stringStop(self: *Tokenizer, has_escapes: *bool) Scan {
-    switch (self.data[self.cursor]) {
-        '"' => {
-            self.cursor += 1;
-            return .end;
-        },
-        '\\' => {
-            if (self.cursor + 1 >= self.data.len) return .fail;
-            has_escapes.* = true;
-            self.cursor += 2;
-            return .cont;
-        },
-        '\n' => return .fail,
-        else => unreachable,
-    }
-}
+const Scan = enum { cont, end, fail };
 
 inline fn numberStop(self: *Tokenizer, decimal: *bool, exponent: *bool) Scan {
     switch (self.data[self.cursor]) {
@@ -343,7 +288,7 @@ inline fn numberStop(self: *Tokenizer, decimal: *bool, exponent: *bool) Scan {
             return .cont;
         },
         'e', 'E' => {
-            if (decimal.* or exponent.*) return .fail;
+            if (exponent.*) return .fail;
 
             self.cursor += 1;
             if (self.cursor >= self.data.len) return .fail;

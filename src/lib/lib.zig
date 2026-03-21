@@ -3,6 +3,39 @@ const Tokenizer = @import("tokenizer.zig");
 const Parser = @import("parser.zig");
 const ztracy = @import("ztracy");
 
+/// The result of parsing a glyph document into a raw AST.
+///
+/// Uses contiguous storage for nodes, fields, and array items. All data is
+/// allocated from the internal arena — freeing is a single O(1) operation
+/// via `deinit`.
+///
+/// String values (non-escaped) are slices directly into the original input
+/// buffer. The input must remain valid for the lifetime of the `Ast`.
+pub const Ast = struct {
+    root: Parser.NodeId,
+    nodes: []const Parser.Node,
+    fields: []const Parser.Node.Field,
+    items: []const Parser.NodeId,
+    arena: std.heap.ArenaAllocator,
+
+    /// Free all memory associated with the AST.
+    pub fn deinit(self: *Ast) void {
+        self.arena.deinit();
+    }
+
+    pub fn getNode(self: *const Ast, id: Parser.NodeId) Parser.Node {
+        return self.nodes[id];
+    }
+
+    pub fn getFields(self: *const Ast, node: Parser.Node) []const Parser.Node.Field {
+        return self.fields[node.object.start..][0..node.object.len];
+    }
+
+    pub fn getItems(self: *const Ast, node: Parser.Node) []const Parser.NodeId {
+        return self.items[node.array.start..][0..node.array.len];
+    }
+};
+
 /// Parse glyph-formatted text into a Zig struct of type `T`.
 ///
 /// Fields of `T` are matched by name against top-level keys in the glyph
@@ -24,9 +57,10 @@ pub fn parse(T: type, allocator: std.mem.Allocator, data: []const u8) !T {
 
     const tokenizer = Tokenizer.init(data);
     var parser = Parser.init(arena.allocator(), tokenizer);
+    defer parser.deinit();
     const root = try parser.parse();
 
-    return materialize(T, allocator, root);
+    return materialize(T, allocator, &parser, root);
 }
 
 /// Parse glyph-formatted text and return the raw AST root node.
@@ -37,13 +71,21 @@ pub fn parse(T: type, allocator: std.mem.Allocator, data: []const u8) !T {
 ///
 /// Note: `Node.string` and `Node.Field.name` are slices into `data`.
 /// The input buffer must remain valid for the lifetime of the tree.
-pub fn ast(allocator: std.mem.Allocator, data: []const u8) !*Parser.Node {
-    const zone = ztracy.ZoneNC(@src(), "glyph.ast", 0x00_00_99_cc);
-    defer zone.End();
+pub fn ast(allocator: std.mem.Allocator, data: []const u8) !Ast {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    errdefer arena.deinit();
 
     const tokenizer = Tokenizer.init(data);
-    var parser = Parser.init(allocator, tokenizer);
-    return parser.parse();
+    var parser = Parser.init(arena.allocator(), tokenizer);
+    const root = try parser.parse();
+
+    return .{
+        .root = root,
+        .nodes = parser.nodes.items,
+        .fields = parser.fields.items,
+        .items = parser.items.items,
+        .arena = arena,
+    };
 }
 
 /// Serialize a Zig struct of type `T` into glyph-formatted text.
@@ -64,7 +106,7 @@ pub fn dump(T: type, allocator: std.mem.Allocator, value: T) ![]const u8 {
     return buf.toOwnedSlice(allocator);
 }
 
-fn materialize(T: type, allocator: std.mem.Allocator, node: *Parser.Node) !T {
+fn materialize(T: type, allocator: std.mem.Allocator, parser: *const Parser, id: Parser.NodeId) !T {
     const zone = ztracy.ZoneNC(@src(), "materialize", 0x00_40_ff_80);
     defer zone.End();
 
@@ -72,53 +114,57 @@ fn materialize(T: type, allocator: std.mem.Allocator, node: *Parser.Node) !T {
     if (info != .@"struct") @compileError("parse target must be a struct");
 
     var result: T = undefined;
-    const fields = node.object;
+    const node = parser.nodes.items[id];
+    const obj_fields = parser.fields.items[node.object.start..][0..node.object.len];
 
     inline for (info.@"struct".fields) |f| {
-        const val = findField(fields, f.name);
-        @field(result, f.name) = try materializeField(f.type, allocator, val);
+        const val = findField(obj_fields, f.name);
+        @field(result, f.name) = try materializeField(f.type, allocator, parser, val);
     }
 
     return result;
 }
 
-fn materializeField(F: type, allocator: std.mem.Allocator, node: ?*Parser.Node) !F {
+fn materializeField(F: type, allocator: std.mem.Allocator, parser: *const Parser, node_id: ?Parser.NodeId) !F {
     const info = @typeInfo(F);
 
     if (info == .optional) {
-        const n = node orelse return null;
-        if (n.* == .nil) return null;
-        return try materializeField(info.optional.child, allocator, n);
+        const nid = node_id orelse return null;
+        const n = parser.nodes.items[nid];
+        if (n == .nil) return null;
+        return try materializeField(info.optional.child, allocator, parser, nid);
     }
 
-    const n = node orelse return error.Unexpected;
+    const nid = node_id orelse return error.Unexpected;
+    const n = parser.nodes.items[nid];
 
     return switch (info) {
-        .bool => if (n.* == .boolean) n.boolean else error.Unexpected,
-        .int => if (n.* == .integer) @intCast(n.integer) else error.Unexpected,
-        .float => if (n.* == .float) @floatCast(n.float) else error.Unexpected,
+        .bool => if (n == .boolean) n.boolean else error.Unexpected,
+        .int => if (n == .integer) @intCast(n.integer) else error.Unexpected,
+        .float => if (n == .float) @floatCast(n.float) else error.Unexpected,
         .pointer => |ptr| blk: {
             if (ptr.size == .slice and ptr.child == u8) {
-                if (n.* == .string) break :blk try allocator.dupe(u8, n.string);
+                if (n == .string) break :blk try allocator.dupe(u8, n.string);
                 return error.Unexpected;
             }
             if (ptr.size == .slice) {
-                if (n.* != .array) return error.Unexpected;
-                var list = try std.ArrayList(ptr.child).initCapacity(allocator, n.array.len);
+                if (n != .array) return error.Unexpected;
+                const arr_items = parser.items.items[n.array.start..][0..n.array.len];
+                var list = try std.ArrayList(ptr.child).initCapacity(allocator, arr_items.len);
                 defer list.deinit(allocator);
-                for (n.array) |item| {
-                    try list.append(allocator, try materializeField(ptr.child, allocator, item));
+                for (arr_items) |item_id| {
+                    try list.append(allocator, try materializeField(ptr.child, allocator, parser, item_id));
                 }
                 break :blk try list.toOwnedSlice(allocator);
             }
             @compileError("unsupported pointer type");
         },
-        .@"struct" => materialize(F, allocator, n),
+        .@"struct" => materialize(F, allocator, parser, nid),
         else => @compileError("unsupported field type: " ++ @typeName(F)),
     };
 }
 
-fn findField(fields: []const Parser.Node.Field, name: []const u8) ?*Parser.Node {
+fn findField(fields: []const Parser.Node.Field, name: []const u8) ?Parser.NodeId {
     for (fields) |f| {
         if (std.mem.eql(u8, f.name, name)) return f.value;
     }
@@ -156,8 +202,8 @@ fn serializeValue(
     const info = @typeInfo(F);
 
     if (info == .optional) {
-        if (value) |v| {
-            try serializeValue(info.optional.child, buf, allocator, v, depth);
+        if (value) |val| {
+            try serializeValue(info.optional.child, buf, allocator, val, depth);
         } else {
             try buf.appendSlice(allocator, "nil");
         }

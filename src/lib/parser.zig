@@ -1,41 +1,32 @@
 const Parser = @This();
 const Tokenizer = @import("tokenizer.zig");
+const v = @import("vector.zig");
 const std = @import("std");
-const ztracy = @import("ztracy");
 
 data: []const u8,
 allocator: std.mem.Allocator,
 tokenizer: Tokenizer,
 current: ?Tokenizer.Token,
 
+nodes: std.ArrayListUnmanaged(Node),
+fields: std.ArrayListUnmanaged(Node.Field),
+items: std.ArrayListUnmanaged(NodeId),
+
+pub const NodeId = u32;
+
 pub const Node = union(enum(u8)) {
     pub const Field = struct {
         name: []const u8,
-        value: *Node,
+        value: NodeId,
     };
 
-    object: []const Field,
-    array: []const *Node,
+    object: struct { start: u32, len: u32 },
+    array: struct { start: u32, len: u32 },
     string: []const u8,
     integer: i64,
     float: f64,
     boolean: bool,
     nil: void,
-
-    pub fn deinit(self: *Node, allocator: std.mem.Allocator) void {
-        switch (self.*) {
-            .object => |fields| {
-                for (fields) |field| field.value.deinit(allocator);
-                allocator.free(fields);
-            },
-            .array => |items| {
-                for (items) |item| item.deinit(allocator);
-                allocator.free(items);
-            },
-            else => {},
-        }
-        allocator.destroy(self);
-    }
 };
 
 const Error =
@@ -44,43 +35,40 @@ const Error =
     std.fmt.ParseIntError ||
     error{Unexpected};
 
-const Handler = *const fn (*Parser) Error!*Node;
-const dispatch_size = std.enums.directEnumArrayLen(Tokenizer.Token.Kind, 0);
-
-const dispatch: [dispatch_size]?Handler = blk: {
-    var table: [dispatch_size]?Handler = .{null} ** dispatch_size;
-    table[@intFromEnum(Tokenizer.Token.Kind.lbrace)] = object;
-    table[@intFromEnum(Tokenizer.Token.Kind.lbracket)] = array;
-    table[@intFromEnum(Tokenizer.Token.Kind.nil)] = literal;
-    table[@intFromEnum(Tokenizer.Token.Kind.string)] = literal;
-    table[@intFromEnum(Tokenizer.Token.Kind.integer)] = literal;
-    table[@intFromEnum(Tokenizer.Token.Kind.float)] = literal;
-    table[@intFromEnum(Tokenizer.Token.Kind.boolean)] = literal;
-    break :blk table;
-};
-
 pub fn init(allocator: std.mem.Allocator, tokenizer: Tokenizer) Parser {
+    const estimate: usize = tokenizer.data.len / 12;
+
     var self = Parser{
         .data = tokenizer.data,
         .allocator = allocator,
         .tokenizer = tokenizer,
         .current = null,
+        .nodes = .empty,
+        .fields = .empty,
+        .items = .empty,
     };
-    self.current = self.nextRaw();
+
+    self.nodes.ensureTotalCapacity(allocator, estimate) catch {};
+    self.fields.ensureTotalCapacity(allocator, estimate / 2) catch {};
+    self.items.ensureTotalCapacity(allocator, estimate / 4) catch {};
+
+    self.current = self.nextToken();
     return self;
 }
 
-fn nextRaw(self: *Parser) ?Tokenizer.Token {
-    while (self.tokenizer.next()) |tok| {
-        if (tok.kind == .whitespace or tok.kind == .comment) continue;
-        return tok;
-    }
-    return null;
+pub fn deinit(self: *Parser) void {
+    self.nodes.deinit(self.allocator);
+    self.fields.deinit(self.allocator);
+    self.items.deinit(self.allocator);
+}
+
+inline fn nextToken(self: *Parser) ?Tokenizer.Token {
+    return self.tokenizer.next();
 }
 
 fn next(self: *Parser) Error!Tokenizer.Token {
     const tok = self.current orelse return Error.Unexpected;
-    self.current = self.nextRaw();
+    self.current = self.nextToken();
     return tok;
 }
 
@@ -93,76 +81,63 @@ fn expect(self: *Parser, kind: Tokenizer.Token.Kind) Error!void {
     if (tok.kind != kind) return Error.Unexpected;
 }
 
-pub fn parse(self: *Parser) Error!*Node {
-    const zone = ztracy.ZoneNC(@src(), "Parser.parse", 0x00_ff_40_40);
-    defer zone.End();
-
-    const node = try self.allocator.create(Node);
-    errdefer self.allocator.destroy(node);
-
-    var fields = try std.ArrayList(Node.Field).initCapacity(self.allocator, 8);
-    defer fields.deinit(self.allocator);
+pub fn parse(self: *Parser) Error!NodeId {
+    const fields_start: u32 = @intCast(self.fields.items.len);
+    var count: u32 = 0;
 
     while (true) {
         const tok = self.peek() orelse break;
         if (tok.kind != .ident) return Error.Unexpected;
         _ = try self.next();
 
-        // Slice directly into the input buffer — no allocation.
         const name = self.data[tok.start..tok.end];
         try self.expect(.colon);
-        try fields.append(self.allocator, .{ .name = name, .value = try self.value() });
+        const val = try self.value();
+        try self.fields.append(self.allocator, .{ .name = name, .value = val });
+        count += 1;
     }
 
-    node.* = .{ .object = try fields.toOwnedSlice(self.allocator) };
-    return node;
+    return self.addNode(.{ .object = .{ .start = fields_start, .len = count } });
 }
 
-fn literal(self: *Parser) Error!*Node {
-    const zone = ztracy.ZoneNC(@src(), "Parser.literal", 0x00_ff_80_80);
-    defer zone.End();
+fn addNode(self: *Parser, node: Node) Error!NodeId {
+    const id: NodeId = @intCast(self.nodes.items.len);
+    try self.nodes.append(self.allocator, node);
+    return id;
+}
 
+fn value(self: *Parser) Error!NodeId {
+    const tok = self.peek() orelse return Error.Unexpected;
+    return switch (tok.kind) {
+        .lbrace => self.object(),
+        .lbracket => self.array(),
+        .nil, .string, .integer, .float, .boolean => self.literal(),
+        else => Error.Unexpected,
+    };
+}
+
+fn literal(self: *Parser) Error!NodeId {
     const tok = try self.next();
-    const node = try self.allocator.create(Node);
-    errdefer self.allocator.destroy(node);
 
-    node.* = switch (tok.kind) {
+    return self.addNode(switch (tok.kind) {
         .nil => .nil,
-        .string => blk: {
-            const raw = self.data[tok.start + 1 .. tok.end - 1];
-            break :blk .{ .string = if (tok.escapes)
-                try unescape(self.allocator, raw)
-            else
-                raw };
-        },
-        .integer => .{ .integer = try std.fmt.parseInt(i64, self.data[tok.start..tok.end], 10) },
-        .float => .{ .float = try std.fmt.parseFloat(f64, self.data[tok.start..tok.end]) },
+        .string => .{ .string = if (tok.escapes)
+            try unescape(self.allocator, self.data[tok.start + 1 .. tok.end - 1])
+        else
+            self.data[tok.start + 1 .. tok.end - 1] },
+        .integer => .{ .integer = fastParseInt(self.data[tok.start..tok.end]) orelse
+            return Error.Unexpected },
+        .float => .{ .float = fastParseFloat(self.data[tok.start..tok.end]) orelse
+            try std.fmt.parseFloat(f64, self.data[tok.start..tok.end]) },
         .boolean => .{ .boolean = self.data[tok.start] == 't' },
         else => return Error.Unexpected,
-    };
-
-    return node;
+    });
 }
 
-fn value(self: *Parser) Error!*Node {
-    const zone = ztracy.ZoneNC(@src(), "Parser.value", 0x00_ff_60_60);
-    defer zone.End();
-
-    const tok = self.peek() orelse return Error.Unexpected;
-    const handler = dispatch[@intFromEnum(tok.kind)] orelse return Error.Unexpected;
-    return handler(self);
-}
-
-fn array(self: *Parser) Error!*Node {
-    const zone = ztracy.ZoneNC(@src(), "Parser.array", 0x00_40_c0_ff);
-    defer zone.End();
-
-    _ = try self.next(); // consume lbracket
-    const node = try self.allocator.create(Node);
-    errdefer self.allocator.destroy(node);
-
-    var values = try std.ArrayList(*Node).initCapacity(self.allocator, 8);
-    defer values.deinit(self.allocator);
+fn array(self: *Parser) Error!NodeId {
+    _ = try self.next();
+    const items_start: u32 = @intCast(self.items.items.len);
+    var count: u32 = 0;
 
     while (true) {
         const tok = self.peek() orelse return Error.Unexpected;
@@ -170,26 +145,21 @@ fn array(self: *Parser) Error!*Node {
             _ = try self.next();
             break;
         }
-        try values.append(self.allocator, try self.value());
+        const val = try self.value();
+        try self.items.append(self.allocator, val);
+        count += 1;
         const after = self.peek() orelse return Error.Unexpected;
         if (after.kind == .rbracket) continue;
         try self.expect(.comma);
     }
 
-    node.* = .{ .array = try values.toOwnedSlice(self.allocator) };
-    return node;
+    return self.addNode(.{ .array = .{ .start = items_start, .len = count } });
 }
 
-fn object(self: *Parser) Error!*Node {
-    const zone = ztracy.ZoneNC(@src(), "Parser.object", 0x00_ff_c0_40);
-    defer zone.End();
-
+fn object(self: *Parser) Error!NodeId {
     _ = try self.next();
-    const node = try self.allocator.create(Node);
-    errdefer self.allocator.destroy(node);
-
-    var fields = try std.ArrayList(Node.Field).initCapacity(self.allocator, 8);
-    defer fields.deinit(self.allocator);
+    const fields_start: u32 = @intCast(self.fields.items.len);
+    var count: u32 = 0;
 
     while (true) {
         const tok = try self.next();
@@ -198,7 +168,9 @@ fn object(self: *Parser) Error!*Node {
 
         const name = self.data[tok.start..tok.end];
         try self.expect(.colon);
-        try fields.append(self.allocator, .{ .name = name, .value = try self.value() });
+        const val = try self.value();
+        try self.fields.append(self.allocator, .{ .name = name, .value = val });
+        count += 1;
 
         const after = self.peek() orelse return Error.Unexpected;
         if (after.kind == .rbrace) {
@@ -207,8 +179,65 @@ fn object(self: *Parser) Error!*Node {
         }
     }
 
-    node.* = .{ .object = try fields.toOwnedSlice(self.allocator) };
-    return node;
+    return self.addNode(.{ .object = .{ .start = fields_start, .len = count } });
+}
+
+fn fastParseInt(s: []const u8) ?i64 {
+    if (s.len == 0) return null;
+
+    var i: usize = 0;
+    const negative = s[0] == '-';
+    if (negative) {
+        i = 1;
+        if (i >= s.len) return null;
+    }
+
+    var result: i64 = 0;
+    while (i < s.len) : (i += 1) {
+        const d = s[i] -% '0';
+        if (d > 9) return null;
+        result = result *% 10 +% d;
+    }
+
+    return if (negative) -%result else result;
+}
+
+fn fastParseFloat(s: []const u8) ?f64 {
+    if (s.len == 0) return null;
+
+    var i: usize = 0;
+    const negative = s[0] == '-';
+    if (negative) {
+        i = 1;
+        if (i >= s.len) return null;
+    }
+
+    var int_part: u64 = 0;
+    while (i < s.len) : (i += 1) {
+        const d = s[i] -% '0';
+        if (d > 9) break;
+        if (int_part > std.math.maxInt(u64) / 10) return null;
+        int_part = int_part * 10 + d;
+    }
+
+    var result: f64 = @floatFromInt(int_part);
+
+    if (i < s.len and s[i] == '.') {
+        i += 1;
+        var frac: f64 = 0;
+        var divisor: f64 = 1;
+        while (i < s.len) : (i += 1) {
+            const d = s[i] -% '0';
+            if (d > 9) break;
+            frac = frac * 10 + @as(f64, @floatFromInt(d));
+            divisor *= 10;
+        }
+        result += frac / divisor;
+    }
+
+    if (i < s.len) return null;
+
+    return if (negative) -result else result;
 }
 
 fn unescape(allocator: std.mem.Allocator, raw: []const u8) Error![]const u8 {
@@ -218,8 +247,23 @@ fn unescape(allocator: std.mem.Allocator, raw: []const u8) Error![]const u8 {
     var i: usize = 0;
     while (i < raw.len) {
         if (raw[i] != '\\') {
-            try buf.append(allocator, raw[i]);
+            const span_start = i;
+
+            // SIMD scan for next backslash.
             i += 1;
+            while (i + v.length <= raw.len) {
+                const chunk: v.Value = raw[i..][0..v.length].*;
+                const mask = @as(v.Bits, @bitCast(v.is(chunk, '\\')));
+                if (mask != 0) {
+                    i += @ctz(mask);
+                    break;
+                }
+                i += v.length;
+            } else {
+                while (i < raw.len and raw[i] != '\\') : (i += 1) {}
+            }
+
+            try buf.appendSlice(allocator, raw[span_start..i]);
             continue;
         }
         i += 1;

@@ -18,3 +18,7 @@ pub inline fn isDigit(chunk: Value) Condition {
 pub inline fn is(chunk: Value, char: u8) Condition {
     return chunk == @as(Value, @splat(char));
 }
+
+pub inline fn isWhitespace(chunk: Value) Condition {
+    return is(chunk, ' ') | is(chunk, '\n') | is(chunk, '\r') | is(chunk, '\t');
+}
