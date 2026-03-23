@@ -25,15 +25,24 @@ Below is a simple [PEG] grammar for Glyph's syntax, for those implementing it th
 [PEG]: https://en.wikipedia.org/wiki/Parsing_expression_grammar
 
 ```
-File          ← Spacing Entry* EOF
+File          ← Spacing (RuneDecl / Entry)* EOF
 Entry         ← Key ':' Spacing Value Spacing
 
-Value         ← Object / Array / String / Float / Integer / Bool / Nil
+Value         ← Object / Array / String / Expr / Bool / Nil
 
-Object        ← '{' Spacing Entry* '}' Spacing
+Object        ← '{' Spacing (RuneDecl / Entry)* '}' Spacing
 
 Array         ← '[' Spacing ArrayBody? ']' Spacing
 ArrayBody     ← Value (',' Spacing Value)* ','? Spacing
+
+Expr          ← ExprPrimary (ExprOp ExprPrimary)*
+ExprPrimary   ← '(' Spacing Expr ')' / ExprFunc / RuneRef / Float / Integer / '-' ExprPrimary
+ExprOp        ← Spacing ('+' / '-' / '*' / '/') Spacing
+ExprFunc      ← Ident '(' Spacing Expr (',' Spacing Expr)* ')' Spacing
+
+RuneDecl      ← RuneName ':' Spacing Value Spacing
+RuneRef       ← RuneName ('.' Key / '[' Integer ']')*
+RuneName      ← '$' [a-zA-Z_] [a-zA-Z0-9_]*
 
 String        ← '"' StringChar* '"'
 StringChar    ← '\\' [\"nrtbf/] / !'"' .
@@ -44,6 +53,7 @@ Bool          ← 'true' / 'false'
 Nil           ← 'nil'
 
 Key           ← Spacing [a-zA-Z_] [a-zA-Z0-9_]*
+Ident         ← [a-zA-Z_] [a-zA-Z0-9_]*
 
 Spacing       ← (WS / Comment)*
 WS            ← [ \t\r\n]+
