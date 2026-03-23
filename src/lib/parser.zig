@@ -82,6 +82,14 @@ fn peek(self: *Parser) ?Tokenizer.Token {
     return self.current;
 }
 
+fn peekSecond(self: *Parser) ?Tokenizer.Token {
+    if (self.current == null) return null;
+    const saved = self.tokenizer;
+    const tok = self.tokenizer.next();
+    self.tokenizer = saved;
+    return tok;
+}
+
 fn expect(self: *Parser, kind: Tokenizer.Token.Kind) Error!void {
     const tok = try self.next();
     if (tok.kind != kind) return Error.Unexpected;
@@ -142,8 +150,31 @@ fn value(self: *Parser) Error!NodeId {
     return switch (tok.kind) {
         .lbrace => self.object(),
         .lbracket => self.array(),
-        .nil, .string, .integer, .float, .boolean => self.literal(),
-        .rune => self.runeRef(),
+        .nil, .string, .boolean => self.literal(),
+        .lparen, .minus => self.expr(0),
+        .ident => blk: {
+            const after = self.peekSecond();
+            break :blk if (after != null and after.?.kind == .lparen)
+                self.expr(0)
+            else
+                self.literal();
+        },
+        .integer, .float => blk: {
+            const id = try self.literal();
+            const after = self.peek();
+            break :blk if (after != null and infixBp(after.?.kind) != null)
+                self.exprCont(id, 0)
+            else
+                id;
+        },
+        .rune => blk: {
+            const id = try self.runeRef();
+            const after = self.peek();
+            break :blk if (after != null and infixBp(after.?.kind) != null)
+                self.exprCont(id, 0)
+            else
+                id;
+        },
         else => Error.Unexpected,
     };
 }
@@ -300,6 +331,192 @@ fn fastParseFloat(s: []const u8) ?f64 {
     if (i < s.len) return null;
 
     return if (negative) -result else result;
+}
+
+const Num = union(enum) {
+    int: i64,
+    float: f64,
+
+    fn toFloat(self: Num) f64 {
+        return switch (self) {
+            .int => |i| @floatFromInt(i),
+            .float => |f| f,
+        };
+    }
+
+    fn add(a: Num, b: Num) Num {
+        if (a == .int and b == .int) return .{ .int = a.int +% b.int };
+        return .{ .float = a.toFloat() + b.toFloat() };
+    }
+
+    fn sub(a: Num, b: Num) Num {
+        if (a == .int and b == .int) return .{ .int = a.int -% b.int };
+        return .{ .float = a.toFloat() - b.toFloat() };
+    }
+
+    fn mul(a: Num, b: Num) Num {
+        if (a == .int and b == .int) return .{ .int = a.int *% b.int };
+        return .{ .float = a.toFloat() * b.toFloat() };
+    }
+
+    fn div(a: Num, b: Num) Error!Num {
+        if (a == .int and b == .int) {
+            if (b.int == 0) return Error.Unexpected;
+            return .{ .int = @divTrunc(a.int, b.int) };
+        }
+        return .{ .float = a.toFloat() / b.toFloat() };
+    }
+};
+
+fn infixBp(kind: Tokenizer.Token.Kind) ?struct { u8, u8 } {
+    return switch (kind) {
+        .plus, .minus => .{ 1, 2 },
+        .star, .slash => .{ 3, 4 },
+        else => null,
+    };
+}
+
+fn exprCont(self: *Parser, lhs: NodeId, min_bp: u8) Error!NodeId {
+    return self.exprLoop(lhs, min_bp);
+}
+
+fn expr(self: *Parser, min_bp: u8) Error!NodeId {
+    const lhs = try self.exprPrimary();
+    return self.exprLoop(lhs, min_bp);
+}
+
+fn exprLoop(self: *Parser, initial: NodeId, min_bp: u8) Error!NodeId {
+    var lhs = initial;
+
+    while (true) {
+        const tok = self.peek() orelse break;
+        const bp = infixBp(tok.kind) orelse break;
+        if (bp[0] < min_bp) break;
+
+        _ = try self.next();
+        const rhs = try self.expr(bp[1]);
+
+        const lnode = self.nodes.items[lhs];
+        const rnode = self.nodes.items[rhs];
+
+        const lnum: Num = switch (lnode) {
+            .integer => |i| .{ .int = i },
+            .float => |f| .{ .float = f },
+            else => return Error.Unexpected,
+        };
+
+        const rnum: Num = switch (rnode) {
+            .integer => |i| .{ .int = i },
+            .float => |f| .{ .float = f },
+            else => return Error.Unexpected,
+        };
+
+        const result: Num = switch (tok.kind) {
+            .plus => Num.add(lnum, rnum),
+            .minus => Num.sub(lnum, rnum),
+            .star => Num.mul(lnum, rnum),
+            .slash => try Num.div(lnum, rnum),
+            else => unreachable,
+        };
+
+        lhs = try self.addNode(switch (result) {
+            .int => |i| .{ .integer = i },
+            .float => |f| .{ .float = f },
+        });
+    }
+
+    return lhs;
+}
+
+fn exprPrimary(self: *Parser) Error!NodeId {
+    const tok = self.peek() orelse return Error.Unexpected;
+
+    switch (tok.kind) {
+        .integer, .float => return self.literal(),
+        .rune => return self.runeRef(),
+        .minus => {
+            _ = try self.next();
+            const operand = try self.exprPrimary();
+            const node = self.nodes.items[operand];
+            return self.addNode(switch (node) {
+                .integer => |i| .{ .integer = -%i },
+                .float => |f| .{ .float = -f },
+                else => return Error.Unexpected,
+            });
+        },
+        .lparen => {
+            _ = try self.next();
+            const inner = try self.expr(0);
+            try self.expect(.rparen);
+            return inner;
+        },
+        .ident => return self.exprFunc(),
+        else => return Error.Unexpected,
+    }
+}
+
+fn exprFunc(self: *Parser) Error!NodeId {
+    const tok = try self.next();
+    const name = self.data[tok.start..tok.end];
+    try self.expect(.lparen);
+
+    const a = try self.expr(0);
+    const anode = self.nodes.items[a];
+    const anum: Num = switch (anode) {
+        .integer => |i| .{ .int = i },
+        .float => |f| .{ .float = f },
+        else => return Error.Unexpected,
+    };
+
+    if (std.mem.eql(u8, name, "abs")) {
+        try self.expect(.rparen);
+        return self.addNode(switch (anum) {
+            .int => |i| .{ .integer = if (i < 0) -%i else i },
+            .float => |f| .{ .float = @abs(f) },
+        });
+    }
+
+    try self.expect(.comma);
+    const b = try self.expr(0);
+    const bnode = self.nodes.items[b];
+    const bnum: Num = switch (bnode) {
+        .integer => |i| .{ .int = i },
+        .float => |f| .{ .float = f },
+        else => return Error.Unexpected,
+    };
+
+    try self.expect(.rparen);
+
+    if (std.mem.eql(u8, name, "pow")) {
+        if (anum == .int and bnum == .int and bnum.int >= 0) {
+            var result: i64 = 1;
+            for (0..@intCast(bnum.int)) |_| result *%= anum.int;
+            return self.addNode(.{ .integer = result });
+        }
+        return self.addNode(.{ .float = std.math.pow(f64, anum.toFloat(), bnum.toFloat()) });
+    }
+
+    if (std.mem.eql(u8, name, "min")) {
+        if (anum == .int and bnum == .int)
+            return self.addNode(.{ .integer = @min(anum.int, bnum.int) });
+        return self.addNode(.{ .float = @min(anum.toFloat(), bnum.toFloat()) });
+    }
+
+    if (std.mem.eql(u8, name, "max")) {
+        if (anum == .int and bnum == .int)
+            return self.addNode(.{ .integer = @max(anum.int, bnum.int) });
+        return self.addNode(.{ .float = @max(anum.toFloat(), bnum.toFloat()) });
+    }
+
+    if (std.mem.eql(u8, name, "mod")) {
+        if (anum == .int and bnum == .int) {
+            if (bnum.int == 0) return Error.Unexpected;
+            return self.addNode(.{ .integer = @mod(anum.int, bnum.int) });
+        }
+        return self.addNode(.{ .float = @mod(anum.toFloat(), bnum.toFloat()) });
+    }
+
+    return Error.Unexpected;
 }
 
 fn pushScope(self: *Parser) Error!void {

@@ -10,6 +10,7 @@ $defaults: {
   theme: "dark"
   language: "en"
   log_targets: ["password", "token", "secret"]
+  base_uid: 0
 }
 
 # ── App metadata ──────────────────────────
@@ -49,7 +50,7 @@ database: {
 
 auth: {
   enabled: true
-  session_duration: 86400
+  session_duration: 60 * 60 * 24
   require_email_verification: true
   allow_guest: false
   secret: "change-me-in-production"
@@ -74,7 +75,7 @@ auth: {
 
 users: [
   {
-    uid: 1
+    uid: $defaults.base_uid + 1
     name: "Alice"
     email: "alice@example.com"
     admin: true
@@ -96,7 +97,7 @@ users: [
   },
 
   {
-    uid: 2
+    uid: $defaults.base_uid + 2
     name: "Bob"
     email: "bob@example.com"
     admin: false
@@ -117,7 +118,7 @@ users: [
   },
 
   {
-    uid: 3
+    uid: $defaults.base_uid + 3
     name: "Carol"
     email: "carol@example.com"
     admin: false
@@ -169,7 +170,7 @@ logging: {
 limits: {
   max_upload_mb: 25
   rate_limit_per_minute: 60
-  max_body_size: 1048576
+  max_body_size: pow(2, 20)
   request_timeout: 15.0
   enabled: true
   burst_allowance: nil

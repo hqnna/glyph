@@ -1,4 +1,5 @@
 $bio: "Lorem ipsum dolor sit amet consectetur adipiscing elit"
+$base_id: 1000
 
 entry_0: {
   name: "user_0"
@@ -6,6 +7,7 @@ entry_0: {
   active: true
   score: 81.4
   age: 37
+  id: $base_id + 0
   bio: $bio
   nickname: "nick_0"
   tags: [

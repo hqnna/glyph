@@ -21,6 +21,12 @@ pub const Token = struct {
         nil,
         rune,
         dot,
+        plus,
+        minus,
+        star,
+        slash,
+        lparen,
+        rparen,
     };
 
     kind: Kind,
@@ -44,6 +50,11 @@ const CharClass = enum(u8) {
     minus,
     dollar,
     dot,
+    plus,
+    star,
+    slash,
+    lparen,
+    rparen,
     other,
 };
 
@@ -64,6 +75,11 @@ const class_table: [256]CharClass = blk: {
     table['-'] = .minus;
     table['$'] = .dollar;
     table['.'] = .dot;
+    table['+'] = .plus;
+    table['*'] = .star;
+    table['/'] = .slash;
+    table['('] = .lparen;
+    table[')'] = .rparen;
     for ('a'..('z' + 1)) |c| table[c] = .alpha;
     for ('A'..('Z' + 1)) |c| table[c] = .alpha;
     table['_'] = .alpha;
@@ -81,7 +97,8 @@ pub fn next(self: *Tokenizer) ?Token {
             .ws => self.skipWhitespace(),
             .comment => self.skipComment(),
             .alpha => return self.scanWord(),
-            .digit, .minus => return self.scanNumber(),
+            .digit => return self.scanNumber(),
+            .minus => return self.scanNumber() orelse self.scanSymbol(.minus),
             .quote => return self.scanString(),
             .lbrace => return self.scanSymbol(.lbrace),
             .rbrace => return self.scanSymbol(.rbrace),
@@ -91,6 +108,11 @@ pub fn next(self: *Tokenizer) ?Token {
             .comma => return self.scanSymbol(.comma),
             .dollar => return self.scanRune(),
             .dot => return self.scanSymbol(.dot),
+            .plus => return self.scanSymbol(.plus),
+            .star => return self.scanSymbol(.star),
+            .slash => return self.scanSymbol(.slash),
+            .lparen => return self.scanSymbol(.lparen),
+            .rparen => return self.scanSymbol(.rparen),
             .other => return null,
         }
     }
