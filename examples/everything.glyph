@@ -2,15 +2,25 @@
 # example.cfg — Comprehensive example file
 # ─────────────────────────────────────────
 
+# ── Runes (constant variables) ───────────
+
+$defaults: {
+  port: 8080
+  timeout: 30.5
+  theme: "dark"
+  language: "en"
+  log_targets: ["password", "token", "secret"]
+}
+
 # ── App metadata ──────────────────────────
 
 app: {
   name: "MyApp"
   version: "2.4.1"
   debug: false
-  port: 8080
+  port: $defaults.port
   max_connections: 200
-  timeout: 30.5
+  timeout: $defaults.timeout
   description: nil
 }
 
@@ -79,9 +89,9 @@ users: [
     ]
 
     settings: {
-      theme: "dark"
+      theme: $defaults.theme
       notifications: true
-      language: "en"
+      language: $defaults.language
     }
   },
 
@@ -145,11 +155,11 @@ logging: {
   max_file_size_mb: 100
   rotate: true
 
-  # Fields to redact from logs
+  # Fields to redact from logs (reusing first 3 from defaults)
   redact: [
-    "password",
-    "token",
-    "secret",
+    $defaults.log_targets[0],
+    $defaults.log_targets[1],
+    $defaults.log_targets[2],
     "credit_card",
   ]
 }

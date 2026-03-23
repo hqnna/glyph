@@ -1,10 +1,12 @@
+$bio: "Lorem ipsum dolor sit amet consectetur adipiscing elit"
+
 entry_0: {
   name: "user_0"
   email: "user0@example.com"
   active: true
   score: 81.4
   age: 37
-  bio: "Lorem ipsum dolor sit amet consectetur adipiscing elit"
+  bio: $bio
   nickname: "nick_0"
   tags: [
     "tag_23",

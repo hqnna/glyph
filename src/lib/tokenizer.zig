@@ -19,6 +19,8 @@ pub const Token = struct {
         colon,
         comma,
         nil,
+        rune,
+        dot,
     };
 
     kind: Kind,
@@ -40,6 +42,8 @@ const CharClass = enum(u8) {
     colon,
     comma,
     minus,
+    dollar,
+    dot,
     other,
 };
 
@@ -58,6 +62,8 @@ const class_table: [256]CharClass = blk: {
     table[':'] = .colon;
     table[','] = .comma;
     table['-'] = .minus;
+    table['$'] = .dollar;
+    table['.'] = .dot;
     for ('a'..('z' + 1)) |c| table[c] = .alpha;
     for ('A'..('Z' + 1)) |c| table[c] = .alpha;
     table['_'] = .alpha;
@@ -83,6 +89,8 @@ pub fn next(self: *Tokenizer) ?Token {
             .rbracket => return self.scanSymbol(.rbracket),
             .colon => return self.scanSymbol(.colon),
             .comma => return self.scanSymbol(.comma),
+            .dollar => return self.scanRune(),
+            .dot => return self.scanSymbol(.dot),
             .other => return null,
         }
     }
@@ -127,6 +135,35 @@ fn skipComment(self: *Tokenizer) void {
 
     while (self.cursor < self.data.len and self.data[self.cursor] != '\n')
         self.cursor += 1;
+}
+
+fn scanRune(self: *Tokenizer) ?Token {
+    const start = self.cursor;
+    self.cursor += 1;
+
+    if (self.cursor >= self.data.len) return null;
+    if (class_table[self.data[self.cursor]] != .alpha) return null;
+
+    self.cursor += 1;
+
+    while (self.cursor + v.length <= self.data.len) : (self.cursor += v.length) {
+        const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
+        const valid = v.isAlpha(chunk) | v.isDigit(chunk) | v.is(chunk, '_');
+        const mask = @as(v.Bits, @bitCast(valid));
+
+        if (mask != std.math.maxInt(v.Bits)) {
+            self.cursor += @ctz(~mask);
+            return .{ .kind = .rune, .escapes = false, .start = start, .end = self.cursor };
+        }
+    }
+
+    while (self.cursor < self.data.len) : (self.cursor += 1) {
+        const c = self.data[self.cursor];
+        if (c == '_') continue;
+        if (!std.ascii.isAlphanumeric(c)) break;
+    }
+
+    return .{ .kind = .rune, .escapes = false, .start = start, .end = self.cursor };
 }
 
 fn scanWord(self: *Tokenizer) Token {
