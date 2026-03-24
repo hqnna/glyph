@@ -3,7 +3,7 @@ const Tokenizer = @import("tokenizer.zig");
 const v = @import("vector.zig");
 const std = @import("std");
 
-const RuneMap = std.StringHashMapUnmanaged(NodeId);
+const NameMap = std.StringHashMapUnmanaged(NodeId);
 
 data: []const u8,
 allocator: std.mem.Allocator,
@@ -13,7 +13,8 @@ current: ?Tokenizer.Token,
 nodes: std.ArrayListUnmanaged(Node),
 fields: std.ArrayListUnmanaged(Node.Field),
 items: std.ArrayListUnmanaged(NodeId),
-rune_stack: std.ArrayListUnmanaged(RuneMap),
+rune_stack: std.ArrayListUnmanaged(NameMap),
+scope_stack: std.ArrayListUnmanaged(NameMap),
 
 pub const NodeId = u32;
 
@@ -50,6 +51,7 @@ pub fn init(allocator: std.mem.Allocator, tokenizer: Tokenizer) Parser {
         .fields = .empty,
         .items = .empty,
         .rune_stack = .empty,
+        .scope_stack = .empty,
     };
 
     self.nodes.ensureTotalCapacity(allocator, estimate) catch {};
@@ -63,6 +65,8 @@ pub fn init(allocator: std.mem.Allocator, tokenizer: Tokenizer) Parser {
 pub fn deinit(self: *Parser) void {
     for (self.rune_stack.items) |*scope| scope.deinit(self.allocator);
     self.rune_stack.deinit(self.allocator);
+    for (self.scope_stack.items) |*scope| scope.deinit(self.allocator);
+    self.scope_stack.deinit(self.allocator);
     self.nodes.deinit(self.allocator);
     self.fields.deinit(self.allocator);
     self.items.deinit(self.allocator);
@@ -96,10 +100,11 @@ fn expect(self: *Parser, kind: Tokenizer.Token.Kind) Error!void {
 }
 
 pub fn parse(self: *Parser) Error!NodeId {
-    const fields_start: u32 = @intCast(self.fields.items.len);
     var count: u32 = 0;
     var pending: std.ArrayListUnmanaged(Node.Field) = .empty;
     var has_runes = false;
+
+    try self.scope_stack.append(self.allocator, .empty);
 
     while (true) {
         const tok = self.peek() orelse break;
@@ -120,23 +125,18 @@ pub fn parse(self: *Parser) Error!NodeId {
         try self.expect(.colon);
         const val = try self.value();
 
-        if (has_runes) {
-            try pending.append(self.allocator, .{ .name = name, .value = val });
-        } else {
-            try self.fields.append(self.allocator, .{ .name = name, .value = val });
-        }
+        try self.refScopePut(name, val);
+        try pending.append(self.allocator, .{ .name = name, .value = val });
         count += 1;
     }
 
-    if (has_runes) {
-        self.popScope();
-        const start: u32 = @intCast(self.fields.items.len);
-        try self.fields.appendSlice(self.allocator, pending.items);
-        pending.deinit(self.allocator);
-        return self.addNode(.{ .object = .{ .start = start, .len = count } });
-    }
+    self.popRefScope();
+    if (has_runes) self.popScope();
 
-    return self.addNode(.{ .object = .{ .start = fields_start, .len = count } });
+    const start: u32 = @intCast(self.fields.items.len);
+    try self.fields.appendSlice(self.allocator, pending.items);
+    pending.deinit(self.allocator);
+    return self.addNode(.{ .object = .{ .start = start, .len = count } });
 }
 
 fn addNode(self: *Parser, node: Node) Error!NodeId {
@@ -175,6 +175,7 @@ fn value(self: *Parser) Error!NodeId {
             else
                 id;
         },
+        .ref => self.fieldRef(),
         else => Error.Unexpected,
     };
 }
@@ -221,10 +222,11 @@ fn array(self: *Parser) Error!NodeId {
 
 fn object(self: *Parser) Error!NodeId {
     _ = try self.next();
-    const fields_start: u32 = @intCast(self.fields.items.len);
     var count: u32 = 0;
     var pending: std.ArrayListUnmanaged(Node.Field) = .empty;
     var has_runes = false;
+
+    try self.scope_stack.append(self.allocator, .empty);
 
     while (true) {
         const tok = self.peek() orelse return Error.Unexpected;
@@ -250,11 +252,8 @@ fn object(self: *Parser) Error!NodeId {
         try self.expect(.colon);
         const val = try self.value();
 
-        if (has_runes) {
-            try pending.append(self.allocator, .{ .name = name, .value = val });
-        } else {
-            try self.fields.append(self.allocator, .{ .name = name, .value = val });
-        }
+        try self.refScopePut(name, val);
+        try pending.append(self.allocator, .{ .name = name, .value = val });
         count += 1;
 
         const after = self.peek() orelse return Error.Unexpected;
@@ -264,15 +263,13 @@ fn object(self: *Parser) Error!NodeId {
         }
     }
 
-    if (has_runes) {
-        self.popScope();
-        const start: u32 = @intCast(self.fields.items.len);
-        try self.fields.appendSlice(self.allocator, pending.items);
-        pending.deinit(self.allocator);
-        return self.addNode(.{ .object = .{ .start = start, .len = count } });
-    }
+    self.popRefScope();
+    if (has_runes) self.popScope();
 
-    return self.addNode(.{ .object = .{ .start = fields_start, .len = count } });
+    const start: u32 = @intCast(self.fields.items.len);
+    try self.fields.appendSlice(self.allocator, pending.items);
+    pending.deinit(self.allocator);
+    return self.addNode(.{ .object = .{ .start = start, .len = count } });
 }
 
 fn fastParseInt(s: []const u8) ?i64 {
@@ -434,6 +431,7 @@ fn exprPrimary(self: *Parser) Error!NodeId {
     switch (tok.kind) {
         .integer, .float => return self.literal(),
         .rune => return self.runeRef(),
+        .ref => return self.fieldRef(),
         .minus => {
             _ = try self.next();
             const operand = try self.exprPrimary();
@@ -549,10 +547,39 @@ fn lookupRune(self: *Parser, name: []const u8) ?NodeId {
     return null;
 }
 
-fn runeRef(self: *Parser) Error!NodeId {
+fn fieldRef(self: *Parser) Error!NodeId {
     const tok = try self.next();
-    const name = self.data[tok.start..tok.end];
-    var node_id = self.lookupRune(name) orelse return Error.Unexpected;
+    const name = self.data[tok.start + 1 .. tok.end];
+
+    var node_id = self.lookupField(name) orelse return Error.Unexpected;
+    node_id = try self.followAccessors(node_id);
+    return node_id;
+}
+
+fn refScopePut(self: *Parser, name: []const u8, val: NodeId) Error!void {
+    const scope = &self.scope_stack.items[self.scope_stack.items.len - 1];
+    try scope.put(self.allocator, name, val);
+}
+
+fn popRefScope(self: *Parser) void {
+    if (self.scope_stack.items.len > 0) {
+        var scope = self.scope_stack.items[self.scope_stack.items.len - 1];
+        scope.deinit(self.allocator);
+        self.scope_stack.items.len -= 1;
+    }
+}
+
+fn lookupField(self: *Parser, name: []const u8) ?NodeId {
+    var i = self.scope_stack.items.len;
+    while (i > 0) {
+        i -= 1;
+        if (self.scope_stack.items[i].get(name)) |id| return id;
+    }
+    return null;
+}
+
+fn followAccessors(self: *Parser, initial: NodeId) Error!NodeId {
+    var node_id = initial;
 
     while (true) {
         const after = self.peek() orelse break;
@@ -600,6 +627,13 @@ fn runeRef(self: *Parser) Error!NodeId {
     }
 
     return node_id;
+}
+
+fn runeRef(self: *Parser) Error!NodeId {
+    const tok = try self.next();
+    const name = self.data[tok.start..tok.end];
+    const node_id = self.lookupRune(name) orelse return Error.Unexpected;
+    return self.followAccessors(node_id);
 }
 
 fn unescape(allocator: std.mem.Allocator, raw: []const u8) Error![]const u8 {

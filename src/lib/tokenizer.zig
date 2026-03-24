@@ -20,6 +20,7 @@ pub const Token = struct {
         comma,
         nil,
         rune,
+        ref,
         dot,
         plus,
         minus,
@@ -49,6 +50,7 @@ const CharClass = enum(u8) {
     comma,
     minus,
     dollar,
+    at,
     dot,
     plus,
     star,
@@ -74,6 +76,7 @@ const class_table: [256]CharClass = blk: {
     table[','] = .comma;
     table['-'] = .minus;
     table['$'] = .dollar;
+    table['@'] = .at;
     table['.'] = .dot;
     table['+'] = .plus;
     table['*'] = .star;
@@ -107,6 +110,7 @@ pub fn next(self: *Tokenizer) ?Token {
             .colon => return self.scanSymbol(.colon),
             .comma => return self.scanSymbol(.comma),
             .dollar => return self.scanRune(),
+            .at => return self.scanRef(),
             .dot => return self.scanSymbol(.dot),
             .plus => return self.scanSymbol(.plus),
             .star => return self.scanSymbol(.star),
@@ -186,6 +190,35 @@ fn scanRune(self: *Tokenizer) ?Token {
     }
 
     return .{ .kind = .rune, .escapes = false, .start = start, .end = self.cursor };
+}
+
+fn scanRef(self: *Tokenizer) ?Token {
+    const start = self.cursor;
+    self.cursor += 1;
+
+    if (self.cursor >= self.data.len) return null;
+    if (class_table[self.data[self.cursor]] != .alpha) return null;
+
+    self.cursor += 1;
+
+    while (self.cursor + v.length <= self.data.len) : (self.cursor += v.length) {
+        const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
+        const valid = v.isAlpha(chunk) | v.isDigit(chunk) | v.is(chunk, '_');
+        const mask = @as(v.Bits, @bitCast(valid));
+
+        if (mask != std.math.maxInt(v.Bits)) {
+            self.cursor += @ctz(~mask);
+            return .{ .kind = .ref, .escapes = false, .start = start, .end = self.cursor };
+        }
+    }
+
+    while (self.cursor < self.data.len) : (self.cursor += 1) {
+        const c = self.data[self.cursor];
+        if (c == '_') continue;
+        if (!std.ascii.isAlphanumeric(c)) break;
+    }
+
+    return .{ .kind = .ref, .escapes = false, .start = start, .end = self.cursor };
 }
 
 fn scanWord(self: *Tokenizer) Token {
