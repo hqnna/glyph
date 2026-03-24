@@ -28,7 +28,7 @@ Below is a simple [PEG] grammar for Glyph's syntax, for those implementing it th
 File          ← Spacing (RuneDecl / Entry)* EOF
 Entry         ← Key ':' Spacing Value Spacing
 
-Value         ← Object / Array / String / Expr / Bool / Nil
+Value         ← Object / Array / String / Expr / FieldRef / Bool / Nil
 
 Object        ← '{' Spacing (RuneDecl / Entry)* '}' Spacing
 
@@ -36,13 +36,18 @@ Array         ← '[' Spacing ArrayBody? ']' Spacing
 ArrayBody     ← Value (',' Spacing Value)* ','? Spacing
 
 Expr          ← ExprPrimary (ExprOp ExprPrimary)*
-ExprPrimary   ← '(' Spacing Expr ')' / ExprFunc / RuneRef / Float / Integer / '-' ExprPrimary
+ExprPrimary   ← '(' Spacing Expr ')' / ExprFunc / RuneRef / FieldRef / Float / Integer / '-' ExprPrimary
 ExprOp        ← Spacing ('+' / '-' / '*' / '/') Spacing
 ExprFunc      ← Ident '(' Spacing Expr (',' Spacing Expr)* ')' Spacing
 
 RuneDecl      ← RuneName ':' Spacing Value Spacing
-RuneRef       ← RuneName ('.' Key / '[' Integer ']')*
+RuneRef       ← RuneName Accessor*
 RuneName      ← '$' [a-zA-Z_] [a-zA-Z0-9_]*
+
+FieldRef      ← FieldName Accessor*
+FieldName     ← '@' [a-zA-Z_] [a-zA-Z0-9_]*
+
+Accessor      ← '.' Key / '[' Integer ']'
 
 String        ← '"' StringChar* '"'
 StringChar    ← '\\' [\"nrtbf/] / !'"' .
