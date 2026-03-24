@@ -175,3 +175,19 @@ limits: {
   enabled: true
   burst_allowance: nil
 }
+
+# ── References ────────────────────────────
+
+# References use @ to point to previously defined fields.
+# They resolve from the current scope outward to global scope.
+
+monitoring: {
+  target_app: @app.name
+  target_port: @app.port
+  db_host: @database.host
+  db_ssl: @database.ssl
+  auth_enabled: @auth.enabled
+  first_provider: @auth.providers[0]
+  dashboard_enabled: @features.new_dashboard
+  log_level: @logging.level
+}
