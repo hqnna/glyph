@@ -50,7 +50,7 @@ database: {
 
 auth: {
   enabled: true
-  session_duration: 60 * 60 * 24
+  session_duration: math(60 * 60 * 24)
   require_email_verification: true
   allow_guest: false
   secret: "change-me-in-production"
@@ -75,7 +75,7 @@ auth: {
 
 users: [
   {
-    uid: $defaults.base_uid + 1
+    uid: math($defaults.base_uid + 1)
     name: "Alice"
     email: "alice@example.com"
     admin: true
@@ -97,7 +97,7 @@ users: [
   },
 
   {
-    uid: $defaults.base_uid + 2
+    uid: math($defaults.base_uid + 2)
     name: "Bob"
     email: "bob@example.com"
     admin: false
@@ -118,7 +118,7 @@ users: [
   },
 
   {
-    uid: $defaults.base_uid + 3
+    uid: math($defaults.base_uid + 3)
     name: "Carol"
     email: "carol@example.com"
     admin: false
@@ -170,7 +170,7 @@ logging: {
 limits: {
   max_upload_mb: 25
   rate_limit_per_minute: 60
-  max_body_size: pow(2, 20)
+  max_body_size: math(pow(2, 20))
   request_timeout: 15.0
   enabled: true
   burst_allowance: nil

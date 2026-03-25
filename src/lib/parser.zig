@@ -150,34 +150,31 @@ fn value(self: *Parser) Error!NodeId {
     return switch (tok.kind) {
         .lbrace => self.object(),
         .lbracket => self.array(),
-        .nil, .string, .boolean => self.literal(),
-        .lparen, .minus => self.expr(0),
+        .nil, .string, .boolean, .integer, .float => self.literal(),
         .ident => blk: {
             const after = self.peekSecond();
             break :blk if (after != null and after.?.kind == .lparen)
-                self.expr(0)
+                self.mathCall()
             else
                 self.literal();
         },
-        .integer, .float => blk: {
-            const id = try self.literal();
-            const after = self.peek();
-            break :blk if (after != null and infixBp(after.?.kind) != null)
-                self.exprCont(id, 0)
-            else
-                id;
-        },
-        .rune => blk: {
-            const id = try self.runeRef();
-            const after = self.peek();
-            break :blk if (after != null and infixBp(after.?.kind) != null)
-                self.exprCont(id, 0)
-            else
-                id;
-        },
+        .rune => self.runeRef(),
         .ref => self.fieldRef(),
         else => Error.Unexpected,
     };
+}
+
+fn mathCall(self: *Parser) Error!NodeId {
+    const tok = self.peek() orelse return Error.Unexpected;
+    const name = self.data[tok.start..tok.end];
+
+    if (!std.mem.eql(u8, name, "math")) return Error.Unexpected;
+
+    _ = try self.next();
+    try self.expect(.lparen);
+    const result = try self.expr(0);
+    try self.expect(.rparen);
+    return result;
 }
 
 fn literal(self: *Parser) Error!NodeId {
