@@ -20,7 +20,7 @@ As of [`f3a80d0`] the Zig library implementation is fully implemented and workin
 
 ## Grammar Specification
 
-Below is a simple [PEG] grammar for Glyph's syntax, for those implementing it theirselves.
+Below is a simple [PEG] grammar for Glyph's syntax, for those implementing it themselves.
 
 [PEG]: https://en.wikipedia.org/wiki/Parsing_expression_grammar
 
