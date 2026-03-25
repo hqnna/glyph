@@ -189,7 +189,7 @@ fn mathCall(self: *Parser) Error!NodeId {
     const tok = self.peek() orelse return Error.Unexpected;
     const name = self.data[tok.start..tok.end];
 
-    if (!std.mem.eql(u8, name, "math")) return Error.Unexpected;
+    if (!std.mem.eql(u8, name, "calc")) return Error.Unexpected;
 
     _ = try self.next();
     try self.expect(.lparen);
