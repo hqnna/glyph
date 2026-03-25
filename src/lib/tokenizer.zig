@@ -28,6 +28,7 @@ pub const Token = struct {
         slash,
         lparen,
         rparen,
+        pipe_string,
     };
 
     kind: Kind,
@@ -57,6 +58,7 @@ const CharClass = enum(u8) {
     slash,
     lparen,
     rparen,
+    pipe,
     other,
 };
 
@@ -83,6 +85,7 @@ const class_table: [256]CharClass = blk: {
     table['/'] = .slash;
     table['('] = .lparen;
     table[')'] = .rparen;
+    table['|'] = .pipe;
     for ('a'..('z' + 1)) |c| table[c] = .alpha;
     for ('A'..('Z' + 1)) |c| table[c] = .alpha;
     table['_'] = .alpha;
@@ -117,6 +120,7 @@ pub fn next(self: *Tokenizer) ?Token {
             .slash => return self.scanSymbol(.slash),
             .lparen => return self.scanSymbol(.lparen),
             .rparen => return self.scanSymbol(.rparen),
+            .pipe => return self.scanPipeString(),
             .other => return null,
         }
     }
@@ -260,6 +264,30 @@ inline fn classifyWord(self: *Tokenizer, start: u32) Token {
     };
 
     return .{ .kind = kind, .escapes = false, .start = start, .end = self.cursor };
+}
+
+fn scanPipeString(self: *Tokenizer) Token {
+    self.cursor += 1;
+    if (self.cursor < self.data.len and self.data[self.cursor] == ' ')
+        self.cursor += 1;
+
+    const start = self.cursor;
+
+    while (self.cursor + v.length <= self.data.len) {
+        const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
+        const mask = @as(v.Bits, @bitCast(v.is(chunk, '\n')));
+
+        if (mask != 0) {
+            self.cursor += @ctz(mask);
+            return .{ .kind = .pipe_string, .escapes = false, .start = start, .end = self.cursor };
+        }
+        self.cursor += v.length;
+    }
+
+    while (self.cursor < self.data.len and self.data[self.cursor] != '\n')
+        self.cursor += 1;
+
+    return .{ .kind = .pipe_string, .escapes = false, .start = start, .end = self.cursor };
 }
 
 fn scanRawString(self: *Tokenizer) Token {

@@ -151,6 +151,7 @@ fn value(self: *Parser) Error!NodeId {
         .lbrace => self.object(),
         .lbracket => self.array(),
         .nil, .string, .boolean, .integer, .float => self.literal(),
+        .pipe_string => self.pipeString(),
         .ident => blk: {
             const after = self.peekSecond();
             break :blk if (after != null and after.?.kind == .lparen)
@@ -162,6 +163,26 @@ fn value(self: *Parser) Error!NodeId {
         .ref => self.fieldRef(),
         else => Error.Unexpected,
     };
+}
+
+fn pipeString(self: *Parser) Error!NodeId {
+    const first = try self.next();
+    const after = self.peek();
+    if (after == null or after.?.kind != .pipe_string)
+        return self.addNode(.{ .string = self.data[first.start..first.end] });
+
+    var buf = try std.ArrayList(u8).initCapacity(self.allocator, 8);
+    try buf.appendSlice(self.allocator, self.data[first.start..first.end]);
+
+    while (true) {
+        const tok = self.peek() orelse break;
+        if (tok.kind != .pipe_string) break;
+        _ = try self.next();
+        try buf.append(self.allocator, '\n');
+        try buf.appendSlice(self.allocator, self.data[tok.start..tok.end]);
+    }
+
+    return self.addNode(.{ .string = buf.items });
 }
 
 fn mathCall(self: *Parser) Error!NodeId {
