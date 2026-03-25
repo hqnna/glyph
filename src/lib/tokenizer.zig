@@ -245,9 +245,12 @@ fn scanWord(self: *Tokenizer) Token {
     return self.classifyWord(start);
 }
 
-inline fn classifyWord(self: *const Tokenizer, start: u32) Token {
+inline fn classifyWord(self: *Tokenizer, start: u32) Token {
     const len = self.cursor - start;
     const word = self.data[start..self.cursor];
+
+    if (len == 1 and word[0] == 'r' and self.cursor < self.data.len and self.data[self.cursor] == '"')
+        return self.scanRawString();
 
     const kind: Token.Kind = switch (len) {
         3 => if (word[0] == 'n' and word[1] == 'i' and word[2] == 'l') .nil else .ident,
@@ -257,6 +260,40 @@ inline fn classifyWord(self: *const Tokenizer, start: u32) Token {
     };
 
     return .{ .kind = kind, .escapes = false, .start = start, .end = self.cursor };
+}
+
+fn scanRawString(self: *Tokenizer) Token {
+    const start = self.cursor;
+    self.cursor += 1;
+
+    while (self.cursor + v.length <= self.data.len) {
+        const chunk: v.Value = self.data[self.cursor..][0..v.length].*;
+        const mask = @as(v.Bits, @bitCast(v.is(chunk, '"') | v.is(chunk, '\n')));
+
+        if (mask != 0) {
+            self.cursor += @ctz(mask);
+            if (self.data[self.cursor] == '"') {
+                self.cursor += 1;
+                return .{ .kind = .string, .escapes = false, .start = start, .end = self.cursor };
+            }
+            return .{ .kind = .ident, .escapes = false, .start = start - 1, .end = start };
+        } else {
+            self.cursor += v.length;
+        }
+    }
+
+    while (self.cursor < self.data.len) {
+        switch (self.data[self.cursor]) {
+            '"' => {
+                self.cursor += 1;
+                return .{ .kind = .string, .escapes = false, .start = start, .end = self.cursor };
+            },
+            '\n' => return .{ .kind = .ident, .escapes = false, .start = start - 1, .end = start },
+            else => self.cursor += 1,
+        }
+    }
+
+    return .{ .kind = .ident, .escapes = false, .start = start - 1, .end = start };
 }
 
 fn scanString(self: *Tokenizer) ?Token {
